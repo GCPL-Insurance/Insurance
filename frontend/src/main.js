@@ -1771,6 +1771,20 @@ async function renderEnrollmentForm() {
     enrollState.rateCards = data.rate_cards || [];
     enrollState.existingEnrollment = data.enrollment;
 
+    // ✅ FIX #2: POPULATE EXISTING DEPENDENTS FROM API RESPONSE
+    // The backend now returns existing_dependents from employee_gmc_enrollment_insured table
+    if (data.existing_dependents && Array.isArray(data.existing_dependents)) {
+      enrollState.dependents = data.existing_dependents.map(dep => ({
+        name: dep.insured_name,
+        relationship: dep.relationship,
+        dob: dep.date_of_birth,
+        gender: dep.gender,
+        sumInsured: dep.sum_insured,
+      }));
+    } else {
+      enrollState.dependents = [];
+    }
+
     // ✅ FIX: Guard null emp — happens for new employees whose draft wasn't persisted
     // or whose HR profile hasn't been set up yet. Show actionable message instead of
     // crashing with "Cannot read properties of null (reading 'emp_id')" on Step 2.
@@ -2575,33 +2589,80 @@ function buildEnrollmentPayload(action) {
 }
 
 async function submitEnrollment() {
-  if (!enrollState.finalAccepted) { showToast('Please check the final declaration box', 'error'); return; }
+  if (!enrollState.finalAccepted) {
+    showToast('Please check the final declaration box', 'error');
+    return;
+  }
+
   const btn = document.getElementById('btn-submit-enroll');
-  if (btn) { btn.disabled = true; btn.textContent = '⏳ Submitting…'; }
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = '⏳ Submitting…';
+  }
 
   try {
-    await enrollment.submit(buildEnrollmentPayload('submit'));
-    // Show centered success modal
-    showEnrollmentSuccessModal();
-    // Refresh enrollment data after a short delay
-    setTimeout(() => renderEnrollmentForm(), 3000);
-  } catch(e) {
-    // ✅ FIX: The backend (Render free-tier) sometimes closes the connection mid-request
-    // AFTER the data is already saved to Supabase. So even if we get a network error,
-    // we must verify whether the enrollment was actually submitted before showing an error.
-    try {
-      const check = await enrollment.getData();
-      if (check?.enrollment?.enrollment_status &&
-          ['SUBMITTED','APPROVED'].includes(check.enrollment.enrollment_status)) {
-        // Data WAS saved — show success, ignore the transient error
-        showEnrollmentSuccessModal();
-        setTimeout(() => renderEnrollmentForm(), 3000);
-        return;
-      }
-    } catch { /* ignore check error, fall through to show original error */ }
+    const payload = buildEnrollmentPayload('submit');
 
-    showToast(e.message || 'Submission failed. Please try again.', 'error');
-    if (btn) { btn.disabled = false; btn.textContent = '🚀 Submit Enrollment'; }
+    // ✅ Use enrollment.submit() via apiFetch — handles token injection,
+    // automatic retry on Render cold-start network drops, and sets
+    // error.isNetworkError = true so the catch block can verify DB state
+    // instead of showing a false failure to the user.
+    const result = await enrollment.submit(payload);
+
+    if (result && result.enrollment_id) {
+      enrollState.existingEnrollment = {
+        enrollment_id: result.enrollment_id,
+        enrollment_status: result.status || 'SUBMITTED',
+        submitted_at: new Date().toISOString(),
+      };
+
+      if (result.insured_members && Array.isArray(result.insured_members)) {
+        enrollState.dependents = result.insured_members.map(m => ({
+          name: m.insured_name,
+          relationship: m.relationship,
+          dob: m.date_of_birth,
+          gender: m.gender,
+          sumInsured: m.sum_insured,
+        }));
+      }
+    }
+
+    showEnrollmentSuccessModal();
+    setTimeout(() => renderEnrollmentForm(), 1500);
+
+  } catch(error) {
+    // ✅ Render free-tier sometimes closes the TCP connection AFTER the DB
+    // write already succeeded. fetchWithRetry in apiFetch already retried
+    // once; if it still failed it sets error.isNetworkError = true.
+    // In that case, verify what actually happened in Supabase before
+    // showing an error — the data was very likely saved successfully.
+    if (error.isNetworkError) {
+      showToast('⚠️ Network interruption — verifying if submission was saved…', 'warn');
+      try {
+        const check = await enrollment.getData();
+        if (['SUBMITTED', 'APPROVED'].includes(check?.enrollment?.enrollment_status)) {
+          enrollState.existingEnrollment = check.enrollment;
+          if (check.existing_dependents && Array.isArray(check.existing_dependents)) {
+            enrollState.dependents = check.existing_dependents.map(m => ({
+              name: m.insured_name,
+              relationship: m.relationship,
+              dob: m.date_of_birth,
+              gender: m.gender,
+              sumInsured: m.sum_insured,
+            }));
+          }
+          showEnrollmentSuccessModal();
+          setTimeout(() => renderEnrollmentForm(), 1500);
+          return;
+        }
+      } catch { /* ignore check error, fall through to show original error */ }
+    }
+
+    showToast(error.message || 'Submission failed. Please try again.', 'error');
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = '🚀 Submit Enrollment';
+    }
   }
 }
 

@@ -504,12 +504,13 @@ router.post('/logout', async (req, res) => {
 
 // ─── GET /api/auth/enrollment-data ───────────────────────────────────────────
 // Protected: fetch employee data + rate cards for GMC enrollment form.
+// ✅ FIX #2: Now also fetches existing_dependents from employee_gmc_enrollment_insured
 // FIX: uses shared requireAuth middleware instead of inline token handling
 router.get('/enrollment-data', requireAuth, async (req, res) => {
   const { emp_id, id: userId } = req.user;
   if (!emp_id) return res.status(400).json({ error: 'No emp_id linked to your account. Contact HR.' });
 
-  const [empRes, rateRes, enrollRes, profileRes] = await Promise.all([
+  const [empRes, rateRes, enrollRes, profileRes, depsRes] = await Promise.all([
     supabase.from('employee_onboarding')
       .select('emp_id,emp_name,gender,date_of_birth,department,designation,date_of_joining,ctc_gmc_per_month,onboarding_status,mobile_number,email_id,unit')
       .eq('emp_id', emp_id).single(),
@@ -520,6 +521,9 @@ router.get('/enrollment-data', requireAuth, async (req, res) => {
       .select('*').eq('emp_id', emp_id).order('created_at', { ascending: false }).limit(1),
     supabase.from('user_profiles')
       .select('email').eq('id', userId).single(),
+    // ✅ FIX #2: Fetch existing dependents from insured table
+    supabase.from('employee_gmc_enrollment_insured')
+      .select('*').eq('emp_id', emp_id),
   ]);
 
   let employeeData = empRes.data;
@@ -565,6 +569,8 @@ router.get('/enrollment-data', requireAuth, async (req, res) => {
       mobile_number: empRes.data?.mobile_number || enrollmentDraft?.mobile_number || null,
       email:         empRes.data?.email_id       || profileRes.data?.email         || enrollmentDraft?.email_id || null,
     },
+    // ✅ FIX #2: Return existing dependents so frontend can populate form
+    existing_dependents: depsRes.data || [],
   });
 });
 
@@ -683,7 +689,20 @@ router.post('/enrollment', requireAuth, async (req, res) => {
     created_at: now,
   }).catch(e => console.warn('[enrollment] audit insert failed:', e.message));
 
-  res.json({ success: true, enrollment_id: enrollmentId, status: enrollmentStatus });
+  // ✅ FIX #1: Fetch and return fresh insured_members in response
+  // This allows frontend to update state immediately without re-fetching
+  const { data: freshMembers } = await supabase
+    .from('employee_gmc_enrollment_insured')
+    .select('*')
+    .eq('enrollment_id', enrollmentId);
+
+  res.json({ 
+    success: true, 
+    enrollment_id: enrollmentId, 
+    status: enrollmentStatus,
+    // ✅ FIX #1: Include fresh members so frontend has complete data
+    insured_members: freshMembers || [],
+  });
 });
 
 // ─── POST /api/auth/simple-signup ─────────────────────────────────────────────
