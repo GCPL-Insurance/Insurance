@@ -80,11 +80,27 @@ app.use(rateLimit({
 }));
 
 // ─── Auth rate limit: 10 attempts/15min ──────────────────────────────────────
+// ONLY applied to login, signup endpoints — NOT to /auth/enrollment or /auth/me.
+// Previously this was mounted on the entire /api/auth prefix, causing enrollment
+// saves/submits to hit the 10-req cap and silently return 429, leaving the UI
+// frozen on "Submitting..." with no error message shown to the employee.
 export const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 10,
-  message: { error: 'Too many login attempts, try again later.' },
-  skipSuccessfulRequests: true, // only count failures
+  message: { error: 'Too many login attempts, please try again later.' },
+  skipSuccessfulRequests: true, // only count failed attempts
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// Enrollment endpoints need a generous limit — employees draft-save multiple
+// times before submitting. 200/15min is enough to never block normal usage.
+export const enrollmentLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 200,
+  message: { error: 'Too many enrollment requests. Please wait a moment and try again.' },
+  standardHeaders: true,
+  legacyHeaders: false,
 });
 
 // ─── JWT middleware ───────────────────────────────────────────────────────────
@@ -144,7 +160,10 @@ import exportRoutes    from './routes/export.js';
 import adminRoutes     from './routes/admin.js';
 import onboardingRoutes from './routes/onboarding.js';
 
-app.use('/api/auth',       authLimiter, authRoutes);
+// authLimiter is now applied per-route inside auth.js (login/signup only).
+// Enrollment routes (/api/auth/enrollment, /api/auth/enrollment-data) are
+// protected by requireAuth (JWT) but NOT by the login rate limiter.
+app.use('/api/auth', authRoutes);
 app.use('/api/onboarding', onboardingRoutes);
 app.use('/api/data',       requireAuth, tableRoutes);
 app.use('/api/views',      requireAuth, viewRoutes);

@@ -98,7 +98,33 @@ export async function apiFetch(path, options = {}) {
   }
 
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+
+  if (!res.ok) {
+    // 429 = rate limited. With the old code, authLimiter on /api/auth/*
+    // would silently cap enrollment saves/submits, leaving the UI frozen.
+    // Now enrollment has its own generous limit (200/15min) but we still
+    // surface the error clearly if it ever fires.
+    if (res.status === 429) {
+      const friendly = new Error(
+        data.error || 'Too many requests — please wait a moment and try again.'
+      );
+      friendly.isRateLimit = true;
+      throw friendly;
+    }
+
+    // 503 = server-side timeout (our 25s guard in auth.js).
+    // Tell the user their data may be saved and to refresh before retrying.
+    if (res.status === 503) {
+      const friendly = new Error(
+        data.error ||
+        'The server took too long to respond. Please refresh the page to check if your submission was saved before trying again.'
+      );
+      friendly.isTimeout = true;
+      throw friendly;
+    }
+
+    throw new Error(data.error || `HTTP ${res.status}`);
+  }
   return data;
 }
 

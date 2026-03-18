@@ -2589,74 +2589,120 @@ async function submitEnrollment() {
   }
 
   const btn = document.getElementById('btn-submit-enroll');
+  const _resetBtn = () => {
+    if (btn) { btn.disabled = false; btn.textContent = '🚀 Submit Enrollment'; }
+  };
+
   if (btn) {
     btn.disabled = true;
     btn.textContent = '⏳ Submitting…';
   }
 
+  // ── Client-side safety timeout ────────────────────────────────────────────
+  // If the entire operation (including retry) takes more than 35s with no
+  // response at all, stop waiting and verify DB state automatically.
+  // This prevents the UI being permanently stuck on "Submitting…" even if
+  // the server-side 25s timeout guard somehow doesn't fire.
+  let timedOut = false;
+  const clientTimeout = setTimeout(async () => {
+    timedOut = true;
+    showToast('⚠️ Taking longer than expected — checking if your data was saved…', 'warn');
+    try {
+      const check = await enrollment.getData();
+      if (['SUBMITTED', 'APPROVED'].includes(check?.enrollment?.enrollment_status)) {
+        _applySuccessResult(check.enrollment, check.existing_dependents || []);
+        showEnrollmentSuccessModal();
+        setTimeout(() => renderEnrollmentForm(), 1500);
+      } else {
+        _resetBtn();
+        showToast('Submission timed out. Please try submitting again.', 'error');
+      }
+    } catch {
+      _resetBtn();
+      showToast('Submission timed out. Please refresh and try again.', 'error');
+    }
+  }, 35000); // 35s client timeout
+
+  // Helper: apply successful result to enrollState from any code path
+  function _applySuccessResult(enrollmentRecord, members) {
+    enrollState.existingEnrollment = {
+      enrollment_id: enrollmentRecord.enrollment_id,
+      enrollment_status: enrollmentRecord.enrollment_status || 'SUBMITTED',
+      submitted_at: enrollmentRecord.submitted_at || new Date().toISOString(),
+    };
+    if (Array.isArray(members) && members.length > 0) {
+      enrollState.dependents = members.map(m => ({
+        name: m.insured_name,
+        relationship: m.relationship,
+        dob: m.date_of_birth,
+        gender: m.gender,
+        sumInsured: m.sum_insured,
+      }));
+    }
+  }
+
   try {
     const payload = buildEnrollmentPayload('submit');
-
-    // ✅ Use enrollment.submit() via apiFetch — handles token injection,
-    // automatic retry on Render cold-start network drops, and sets
-    // error.isNetworkError = true so the catch block can verify DB state
-    // instead of showing a false failure to the user.
     const result = await enrollment.submit(payload);
 
-    if (result && result.enrollment_id) {
-      enrollState.existingEnrollment = {
-        enrollment_id: result.enrollment_id,
-        enrollment_status: result.status || 'SUBMITTED',
-        submitted_at: new Date().toISOString(),
-      };
+    // If the client timeout already fired while we were waiting, don't
+    // double-show the success modal — it's already been handled.
+    if (timedOut) return;
+    clearTimeout(clientTimeout);
 
-      if (result.insured_members && Array.isArray(result.insured_members)) {
-        enrollState.dependents = result.insured_members.map(m => ({
-          name: m.insured_name,
-          relationship: m.relationship,
-          dob: m.date_of_birth,
-          gender: m.gender,
-          sumInsured: m.sum_insured,
-        }));
-      }
+    if (result && result.enrollment_id) {
+      _applySuccessResult(
+        { enrollment_id: result.enrollment_id, enrollment_status: result.status, submitted_at: new Date().toISOString() },
+        result.insured_members || []
+      );
     }
 
     showEnrollmentSuccessModal();
     setTimeout(() => renderEnrollmentForm(), 1500);
 
   } catch(error) {
-    // ✅ Render free-tier sometimes closes the TCP connection AFTER the DB
-    // write already succeeded. fetchWithRetry in apiFetch already retried
-    // once; if it still failed it sets error.isNetworkError = true.
-    // In that case, verify what actually happened in Supabase before
-    // showing an error — the data was very likely saved successfully.
-    if (error.isNetworkError) {
-      showToast('⚠️ Network interruption — verifying if submission was saved…', 'warn');
+    if (timedOut) return; // timeout handler already took over
+    clearTimeout(clientTimeout);
+
+    // ── Network error (TCP drop / Render cold-start) ───────────────────────
+    // fetchWithRetry already retried once. The DB write likely succeeded but
+    // the HTTP response was never delivered. Verify DB state before showing
+    // an error — in most cases the submission WAS saved.
+    if (error.isNetworkError || error.isTimeout) {
+      const msg = error.isTimeout
+        ? '⚠️ Server timeout — verifying if submission was saved…'
+        : '⚠️ Network interruption — verifying if submission was saved…';
+      showToast(msg, 'warn');
       try {
         const check = await enrollment.getData();
         if (['SUBMITTED', 'APPROVED'].includes(check?.enrollment?.enrollment_status)) {
-          enrollState.existingEnrollment = check.enrollment;
-          if (check.existing_dependents && Array.isArray(check.existing_dependents)) {
-            enrollState.dependents = check.existing_dependents.map(m => ({
-              name: m.insured_name,
-              relationship: m.relationship,
-              dob: m.date_of_birth,
-              gender: m.gender,
-              sumInsured: m.sum_insured,
-            }));
-          }
+          _applySuccessResult(check.enrollment, check.existing_dependents || []);
           showEnrollmentSuccessModal();
           setTimeout(() => renderEnrollmentForm(), 1500);
           return;
         }
-      } catch { /* ignore check error, fall through to show original error */ }
+        // DB says not submitted — genuine failure, let user retry
+        _resetBtn();
+        showToast('Submission failed — your data was not saved. Please try again.', 'error');
+        return;
+      } catch {
+        // Even the verify call failed — tell user to refresh and check
+        _resetBtn();
+        showToast('Could not verify submission status. Please refresh the page to check if your enrollment was saved.', 'warn');
+        return;
+      }
     }
 
-    showToast(error.message || 'Submission failed. Please try again.', 'error');
-    if (btn) {
-      btn.disabled = false;
-      btn.textContent = '🚀 Submit Enrollment';
+    // ── Rate limit hit ─────────────────────────────────────────────────────
+    if (error.isRateLimit) {
+      _resetBtn();
+      showToast('Too many requests — please wait 1 minute and try submitting again.', 'error');
+      return;
     }
+
+    // ── All other errors (validation, auth, etc.) ──────────────────────────
+    _resetBtn();
+    showToast(error.message || 'Submission failed. Please try again.', 'error');
   }
 }
 

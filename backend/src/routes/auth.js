@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { supabase } from '../index.js';
-import { requireAuth } from '../index.js';
+import { requireAuth, authLimiter, enrollmentLimiter } from '../index.js';
 
 const router = Router();
 
@@ -178,7 +178,7 @@ router.post('/gmc-verify-emp', async (req, res) => {
 
 // ─── POST /api/auth/gmc-signup ────────────────────────────────────────────────
 // Public: New employee self-registration via GMC portal.
-router.post('/gmc-signup', async (req, res) => {
+router.post('/gmc-signup', authLimiter, async (req, res) => {
   const {
     emp_id, email, password, full_name, captchaToken,
     gender, date_of_birth, department, designation, date_of_joining, mobile_number, unit,
@@ -329,7 +329,7 @@ router.post('/gmc-signup', async (req, res) => {
 
 // ─── POST /api/auth/signup ────────────────────────────────────────────────────
 // Public: Standard employee self-registration (must already be in employees table).
-router.post('/signup', async (req, res) => {
+router.post('/signup', authLimiter, async (req, res) => {
   const { emp_id, email, password, full_name, captchaToken } = req.body;
 
   if (!emp_id || !email || !password)
@@ -426,7 +426,7 @@ router.post('/verify-emp', async (req, res) => {
 
 // ─── POST /api/auth/login ─────────────────────────────────────────────────────
 // Public: Authenticate and return JWT tokens.
-router.post('/login', async (req, res) => {
+router.post('/login', authLimiter, async (req, res) => {
   const { email, password, captchaToken } = req.body;
   if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
 
@@ -506,7 +506,7 @@ router.post('/logout', async (req, res) => {
 // Protected: fetch employee data + rate cards for GMC enrollment form.
 // ✅ FIX #2: Now also fetches existing_dependents from employee_gmc_enrollment_insured
 // FIX: uses shared requireAuth middleware instead of inline token handling
-router.get('/enrollment-data', requireAuth, async (req, res) => {
+router.get('/enrollment-data', requireAuth, enrollmentLimiter, async (req, res) => {
   const { emp_id, id: userId } = req.user;
   if (!emp_id) return res.status(400).json({ error: 'No emp_id linked to your account. Contact HR.' });
 
@@ -577,9 +577,47 @@ router.get('/enrollment-data', requireAuth, async (req, res) => {
 // ─── POST /api/auth/enrollment ────────────────────────────────────────────────
 // Protected: save or submit GMC enrollment.
 // FIX: uses shared requireAuth middleware; insured_members handled atomically
-router.post('/enrollment', requireAuth, async (req, res) => {
+router.post('/enrollment', requireAuth, enrollmentLimiter, async (req, res) => {
   const { emp_id } = req.user;
   if (!emp_id) return res.status(400).json({ error: 'No emp_id linked to your account.' });
+
+  // Hard timeout: if the DB takes more than 25s, respond with a clear 503 instead
+  // of letting Render's load balancer silently drop the TCP connection (which causes
+  // the browser to see a network error with no message and hang on "Submitting...").
+  // The frontend's isNetworkError path will then verify DB state and recover.
+  let responded = false;
+  const timeoutHandle = setTimeout(() => {
+    if (!responded) {
+      responded = true;
+      console.error('[enrollment] handler timeout for emp_id:', emp_id);
+      res.status(503).json({
+        error: 'The server took too long to respond. Your data may have been saved — please refresh to check before trying again.',
+        _timeout: true,
+      });
+    }
+  }, 25000); // 25s — well under Render's 55s idle timeout
+
+  // Wrap the original res.json so we can cancel the timeout and set responded flag
+  const _origJson = res.json.bind(res);
+  res.json = function(body) {
+    if (!responded) {
+      responded = true;
+      clearTimeout(timeoutHandle);
+    }
+    return _origJson(body);
+  };
+  const _origStatus = res.status.bind(res);
+  res.status = function(code) {
+    const chained = _origStatus(code);
+    chained.json = function(body) {
+      if (!responded) {
+        responded = true;
+        clearTimeout(timeoutHandle);
+      }
+      return _origJson.call(res, body);
+    };
+    return chained;
+  };
 
   const { action, enrollment, insured_members, summary } = req.body;
   if (!['save', 'submit'].includes(action)) {
@@ -598,10 +636,23 @@ router.post('/enrollment', requireAuth, async (req, res) => {
     return res.status(403).json({ error: 'Enrollment is already approved and locked.' });
   }
 
-  // ✅ FIX: If already SUBMITTED and action is submit again (retry scenario),
-  // return success instead of an error — data is already saved correctly.
+  // If already SUBMITTED and action is submit again (Render cold-start retry scenario):
+  // The first request saved the data but the TCP response was dropped before reaching
+  // the browser. fetchWithRetry fired the request again 2s later. We detect this and
+  // return success immediately — but we MUST also return insured_members so the
+  // frontend can update its state and show the success modal correctly.
   if (existing?.enrollment_status === 'SUBMITTED' && action === 'submit') {
-    return res.json({ success: true, enrollment_id: existing.enrollment_id, status: 'SUBMITTED' });
+    const { data: existingMembers } = await supabase
+      .from('employee_gmc_enrollment_insured')
+      .select('*')
+      .eq('enrollment_id', existing.enrollment_id);
+    return res.json({
+      success: true,
+      enrollment_id: existing.enrollment_id,
+      status: 'SUBMITTED',
+      insured_members: existingMembers || [],
+      _retry: true, // diagnostic flag — visible in server logs
+    });
   }
 
   const enrollmentStatus = action === 'submit' ? 'SUBMITTED' : 'DRAFT';
@@ -708,7 +759,7 @@ router.post('/enrollment', requireAuth, async (req, res) => {
 // ─── POST /api/auth/simple-signup ─────────────────────────────────────────────
 // Public: Simplified employee self-registration — no FK check, direct onboarding insert.
 // Employee fills in their own details. Completely independent of employees table.
-router.post('/simple-signup', async (req, res) => {
+router.post('/simple-signup', authLimiter, async (req, res) => {
   const {
     emp_id, emp_name, email, password, captchaToken,
     gender, date_of_birth, date_of_joining,
