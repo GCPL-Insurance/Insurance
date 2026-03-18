@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { supabase } from '../index.js';
-import { requireAuth, authLimiter, enrollmentLimiter } from '../index.js';
+import { requireAuth } from '../index.js';
+import { authLimiter, enrollmentLimiter } from '../limiters.js';
 
 const router = Router();
 

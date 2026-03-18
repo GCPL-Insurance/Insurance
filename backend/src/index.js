@@ -4,6 +4,7 @@ import helmet from 'helmet';
 import cors from 'cors';
 import rateLimit from 'express-rate-limit';
 import { createClient } from '@supabase/supabase-js';
+import { authLimiter, enrollmentLimiter } from './limiters.js';
 
 // ─── Prevent silent crashes on unhandled async errors ────────────────────────
 process.on('unhandledRejection', (reason) => {
@@ -80,28 +81,9 @@ app.use(rateLimit({
 }));
 
 // ─── Auth rate limit: 10 attempts/15min ──────────────────────────────────────
-// ONLY applied to login, signup endpoints — NOT to /auth/enrollment or /auth/me.
-// Previously this was mounted on the entire /api/auth prefix, causing enrollment
-// saves/submits to hit the 10-req cap and silently return 429, leaving the UI
-// frozen on "Submitting..." with no error message shown to the employee.
-export const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 10,
-  message: { error: 'Too many login attempts, please try again later.' },
-  skipSuccessfulRequests: true, // only count failed attempts
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-
-// Enrollment endpoints need a generous limit — employees draft-save multiple
-// times before submitting. 200/15min is enough to never block normal usage.
-export const enrollmentLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 200,
-  message: { error: 'Too many enrollment requests. Please wait a moment and try again.' },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
+// authLimiter and enrollmentLimiter are imported from ./limiters.js above.
+// Re-exported here so any other files importing them from index.js still work.
+export { authLimiter, enrollmentLimiter };
 
 // ─── JWT middleware ───────────────────────────────────────────────────────────
 // Verifies Supabase JWT, loads profile, attaches to req.user
