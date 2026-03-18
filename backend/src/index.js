@@ -149,7 +149,11 @@ app.use('/api/onboarding', onboardingRoutes);
 app.use('/api/data',       requireAuth, tableRoutes);
 app.use('/api/views',      requireAuth, viewRoutes);
 app.use('/api/export',     requireAuth, exportRoutes);
-app.use('/api/admin',      requireAuth, requireRole('admin'), adminRoutes);
+// Admin-only routes: user management, rate card config, etc.
+// Enrollment review is accessible to both admin AND hr — see onboarding.js for hr-specific routes.
+// NOTE: requireRole('admin','hr') on /api/admin gives HR read + enrollment access but
+// the user_management endpoint additionally checks for admin role at the handler level.
+app.use('/api/admin',      requireAuth, requireRole('admin', 'hr'), adminRoutes);
 
 // ─── /api/auth/me — validate token and return user ───────────────────────────
 // NOTE: this must be BEFORE the 404 handler but AFTER authRoutes so authLimiter applies

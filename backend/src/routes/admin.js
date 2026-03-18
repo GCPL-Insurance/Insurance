@@ -2,12 +2,21 @@ import { Router } from 'express';
 import { supabase } from '../index.js';
 
 const router = Router();
-// All routes here already require admin role (enforced in index.js via requireRole('admin'))
+
+// ─── Role guard helper ────────────────────────────────────────────────────────
+// /api/admin is accessible to both admin and hr (for enrollment review).
+// User management routes below require the stricter admin-only check.
+function requireAdmin(req, res, next) {
+  if (req.user?.role !== 'admin') {
+    return res.status(403).json({ error: 'Access denied. Admin role required.' });
+  }
+  next();
+}
 
 const VALID_ROLES = ['admin', 'hr', 'employee'];
 
 // ─── GET /api/admin/users ─────────────────────────────────────────────────────
-router.get('/users', async (req, res) => {
+router.get('/users', requireAdmin, async (req, res) => {
   const { data, error } = await supabase
     .from('user_profiles')
     .select('id, emp_id, email, full_name, role, is_active, created_at')
@@ -17,7 +26,7 @@ router.get('/users', async (req, res) => {
 });
 
 // ─── POST /api/admin/users — create new user ──────────────────────────────────
-router.post('/users', async (req, res) => {
+router.post('/users', requireAdmin, async (req, res) => {
   let { email, password, full_name, emp_id, role } = req.body;
 
   if (!email || !password) return res.status(400).json({ error: 'email and password required' });
@@ -106,7 +115,7 @@ router.post('/users', async (req, res) => {
 });
 
 // ─── PATCH /api/admin/users/:userId — update role / emp_id / active status ───
-router.patch('/users/:userId', async (req, res) => {
+router.patch('/users/:userId', requireAdmin, async (req, res) => {
   const { userId } = req.params;
   const { role, emp_id, is_active, full_name } = req.body;
 
@@ -141,7 +150,7 @@ router.patch('/users/:userId', async (req, res) => {
 });
 
 // ─── DELETE /api/admin/users/:userId ─────────────────────────────────────────
-router.delete('/users/:userId', async (req, res) => {
+router.delete('/users/:userId', requireAdmin, async (req, res) => {
   const { userId } = req.params;
 
   // Prevent self-deletion
@@ -155,7 +164,7 @@ router.delete('/users/:userId', async (req, res) => {
 });
 
 // ─── POST /api/admin/users/:userId/reset-password ────────────────────────────
-router.post('/users/:userId/reset-password', async (req, res) => {
+router.post('/users/:userId/reset-password', requireAdmin, async (req, res) => {
   const { userId } = req.params;
   const { password } = req.body;
   if (!password || password.length < 8)

@@ -194,12 +194,7 @@ const VIEW_META = {
 const VIEW_CATEGORIES = ['All','Employee','GMC','Finance','F&F','Claims','GPA','Policy'];
 
 // ─── AUTH ──────────────────────────────────────────────────────────────────────
-let selectedLoginRole = 'admin';
-
-function setRole(r) {
-  selectedLoginRole = r;
-  document.querySelectorAll('.role-tab').forEach(t => t.classList.toggle('active', t.dataset.role === r));
-}
+// Role is auto-detected from DB on login — no tab selection required.
 
 // ─── CLOUDFLARE TURNSTILE ─────────────────────────────────────────────────────
 const TURNSTILE_SITE_KEY = '0x4AAAAAACkZLaHpH_V7JE3L';
@@ -252,6 +247,13 @@ async function doLogin() {
   err.style.display = 'none';
   btn.disabled = true; btn.textContent = 'Signing in…';
 
+  if (!email || !pwd) {
+    err.textContent = 'Please enter your email and password.';
+    err.style.display = 'block';
+    btn.disabled = false; btn.textContent = 'Sign In';
+    return;
+  }
+
   if (!turnstileLoginToken) {
     err.textContent = 'Please wait for the security check to complete.';
     err.style.display = 'block';
@@ -259,33 +261,24 @@ async function doLogin() {
     return;
   }
   const captchaToken = turnstileLoginToken;
-  turnstileLoginToken = ''; // consume once
+  turnstileLoginToken = ''; // consume once — reset widget so it refreshes
 
   try {
-    // 🔒 Login goes through our backend — never directly to Supabase
+    // 🔒 Single unified login — role is auto-detected from user_profiles in DB.
+    // No role tab required. Admin, HR, and Employee all use the same form.
     const user = await auth.login(email, pwd, captchaToken);
 
-    // Role gate: chosen tab must match actual role
-    if (selectedLoginRole === 'admin' && user.role !== 'admin') {
-      await auth.logout();
-      throw new Error('Access denied. You do not have Admin privileges.');
-    }
-    if (selectedLoginRole === 'hr' && user.role === 'employee') {
-      await auth.logout();
-      throw new Error('Access denied. You do not have HR privileges.');
-    }
-
     state.user     = user;
-    state.role     = user.role;
+    state.role     = user.role || 'employee';
     state.empId    = user.emp_id  || '';
     state.userName = user.full_name || email;
     initApp();
   } catch(e) {
-    err.textContent = e.message || 'Login failed. Check credentials.';
+    err.textContent = e.message || 'Login failed. Please check your email and password.';
     err.style.display = 'block';
     resetTurnstile('login');
+    btn.disabled = false; btn.textContent = 'Sign In';
   }
-  btn.disabled = false; btn.textContent = 'Sign In';
 }
 
 async function doLogout() {
@@ -296,6 +289,8 @@ async function doLogout() {
 }
 
 // ─── APP INIT ─────────────────────────────────────────────────────────────────
+// ⚠️  _origInitApp is superseded by the initApp() override near the bottom of this file.
+// It is kept here only as a reference. window.initApp = initApp (the override) is what runs.
 function _origInitApp() {
   document.getElementById('login-page').style.display = 'none';
   document.getElementById('app').classList.add('visible');
@@ -1599,7 +1594,6 @@ function showToast(msg, type = 'success') {
 }
 
 // ─── EXPOSE TO HTML ───────────────────────────────────────────────────────────
-window.setRole           = setRole;
 window.doLogin           = doLogin;
 window.doLogout          = doLogout;
 window.navigate          = _origNavigate; // will be overridden below
@@ -2872,14 +2866,30 @@ async function doAdminEnrollAction(id, action) {
   if ((action === 'REJECTED' || action === 'CORRECTION_REQUIRED') && !remarks) {
     showToast('Please enter remarks before ' + action, 'error'); return;
   }
+
+  // Disable all action buttons during the request to prevent double-clicks
+  const actionBtns = document.querySelectorAll('#modal-body .btn-danger, #modal-body .btn-secondary, #modal-body .btn-success');
+  actionBtns.forEach(b => { b.disabled = true; b.style.opacity = '0.6'; });
+
+  const actionLabel = { APPROVED: 'Approving…', REJECTED: 'Rejecting…', CORRECTION_REQUIRED: 'Requesting…' }[action] || 'Processing…';
+  const activeBtn = [...actionBtns].find(b => b.textContent.toLowerCase().includes(
+    action === 'APPROVED' ? 'approve' : action === 'REJECTED' ? 'reject' : 'correction'
+  ));
+  if (activeBtn) activeBtn.textContent = actionLabel;
+
   try {
     await adminEnrollment.review(id, action, remarks);
-    showToast(action === 'APPROVED' ? 'Enrollment Approved ✅' : action === 'REJECTED' ? 'Enrollment Rejected' : 'Correction requested', action === 'APPROVED' ? 'success' : 'error');
+    const successMsg = action === 'APPROVED'
+      ? 'Enrollment Approved ✅'
+      : action === 'REJECTED'
+      ? 'Enrollment Rejected'
+      : 'Correction requested';
+    showToast(successMsg, action === 'APPROVED' ? 'success' : 'warn');
     closeModal();
-    loadAdminEnrollments(adminEnrollFilter);
+    await loadAdminEnrollments(adminEnrollFilter);
   } catch(e) {
     if (e.isNetworkError) {
-      // Network dropped — verify what actually happened in the DB before assuming success
+      // Network dropped — verify what actually happened in the DB before assuming failure
       showToast('⚠️ Network error — verifying if action was saved…', 'warn');
       closeModal();
       setTimeout(async () => {
@@ -2894,11 +2904,17 @@ async function doAdminEnrollAction(id, action) {
         } catch {
           showToast('⚠️ Could not verify — please refresh and check status manually.', 'warn');
         }
-        loadAdminEnrollments(adminEnrollFilter);
+        await loadAdminEnrollments(adminEnrollFilter);
       }, 2500);
       return;
     }
-    showToast(e.message, 'error');
+    // Non-network error — re-enable buttons so user can retry without closing modal
+    showToast(e.message || 'Action failed. Please try again.', 'error');
+    actionBtns.forEach(b => { b.disabled = false; b.style.opacity = ''; });
+    if (activeBtn) {
+      const labels = { APPROVED: '✅ Approve', REJECTED: '❌ Reject', CORRECTION_REQUIRED: '🔁 Request Correction' };
+      activeBtn.textContent = labels[action] || action;
+    }
   }
 }
 
@@ -4296,30 +4312,50 @@ async function renderPageV2(page) {
 window.navigate    = navigate;
 window.renderPageV2 = renderPageV2;
 
-// ─── Fix sidebar visibility for employees ───────────────────────────────────
-// Override initApp to handle data-admin-only correctly with new sidebar
+// ─── Fix sidebar visibility — full reset then role-based show/hide ───────────
+// Override initApp to guarantee a clean slate on every login/session restore.
+// Previously only hid elements; if a user changed roles between sessions the
+// old visibility state leaked through. Now we reset ALL elements to visible
+// first, then hide what this role should not see.
 function initApp() {
   document.getElementById('login-page').style.display = 'none';
   document.getElementById('app').classList.add('visible');
 
+  const role = state.role || 'employee';
+
+  // ── Topbar badge ──────────────────────────────────────────────────────────
   const badge = document.getElementById('topbar-badge');
-  const roleIcons = { admin: '👑', hr: '👤', employee: '🏷️' };
-  badge.className = 'topbar-badge ' + state.role;
-  badge.innerHTML = (roleIcons[state.role]||'👤') + ' ' + state.role.toUpperCase();
-  document.getElementById('topbar-user').textContent = state.userName || state.user.email;
+  const roleIcons = { admin: '👑', hr: '🧑‍💼', employee: '🏷️' };
+  const roleLabels = { admin: 'Admin', hr: 'HR', employee: 'Employee' };
+  badge.className = 'topbar-badge ' + role;
+  badge.innerHTML = (roleIcons[role] || '👤') + ' ' + (roleLabels[role] || role.toUpperCase());
+  document.getElementById('topbar-user').textContent = state.userName || state.user?.email || '';
 
-  if (state.role === 'admin') {
-    document.getElementById('admin-section').style.display = 'block';
-  }
+  // ── Step 1: Reset ALL sidebar items to visible ────────────────────────────
+  // This ensures no stale hide state from a previous role/session.
+  document.querySelectorAll('[data-admin-only]').forEach(el => el.style.display = '');
+  document.querySelectorAll('[data-employee-only]').forEach(el => el.style.display = '');
+  document.getElementById('admin-section').style.display = 'none'; // default hidden; shown for admin below
 
-  if (state.role === 'employee') {
-    // Hide all admin-only sections
+  // ── Step 2: Hide items that don't belong to this role ─────────────────────
+  if (role === 'employee') {
+    // Employees see ONLY their own My Insurance section and Support
     document.querySelectorAll('[data-admin-only]').forEach(el => el.style.display = 'none');
+    // Employee-only items already visible — nothing more to hide
   } else {
-    // HR and Admin: hide employee-only items
+    // HR and Admin: hide employee self-service items
     document.querySelectorAll('[data-employee-only]').forEach(el => el.style.display = 'none');
+
+    if (role === 'admin') {
+      // Admin gets user management section
+      document.getElementById('admin-section').style.display = 'block';
+    }
+    // HR sees all admin-only data/analytics items but NOT user management
+    // (admin-section stays hidden for hr)
   }
 
-  navigate(state.role === 'employee' ? 'employee_dashboard' : 'dashboard');
+  // ── Navigate to role's home page ──────────────────────────────────────────
+  const homePage = role === 'employee' ? 'employee_dashboard' : 'dashboard';
+  navigate(homePage);
 }
 window.initApp = initApp;

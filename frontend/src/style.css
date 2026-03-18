@@ -42,11 +42,7 @@ body { background: var(--bg); color: var(--text); font-family: 'DM Sans', sans-s
 .login-logo-sub { font-size: 11px; color: var(--text3); letter-spacing: 0.5px; }
 .login-title { font-size: 22px; font-weight: 700; color: #0f172a; margin-bottom: 4px; }
 .login-sub { color: var(--text3); font-size: 13px; margin-bottom: 24px; }
-.role-tabs { display: flex; gap: 4px; background: var(--bg); border-radius: 12px; padding: 4px; margin-bottom: 20px; border: 1px solid var(--border); }
-.role-tab { flex: 1; padding: 7px 4px; border: none; border-radius: 8px; background: transparent; color: var(--text3); font-size: 12px; font-weight: 600; cursor: pointer; transition: all .2s; display: flex; align-items: center; justify-content: center; gap: 5px; }
-.role-tab .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; opacity: .5; }
-.role-tab.active { background: white; color: var(--accent); box-shadow: var(--shadow-sm); }
-.role-tab.active .dot { opacity: 1; }
+/* Role tabs removed — login now uses single unified form; role auto-detected from DB */
 .form-group { margin-bottom: 14px; }
 .form-label { font-size: 11px; font-weight: 600; color: var(--text3); text-transform: uppercase; letter-spacing: .5px; display: block; margin-bottom: 5px; }
 .form-input { width: 100%; border: 1.5px solid var(--border); border-radius: 10px; padding: 11px 14px; font-size: 14px; color: var(--text); background: var(--surface2); transition: border-color .2s, box-shadow .2s; outline: none; font-family: inherit; }
