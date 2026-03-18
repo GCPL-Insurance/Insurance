@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover" />
+  <title>InsurePortal — GCPL Insurance Dashboard</title>
+  <meta name="description" content="GCPL GMC Insurance Management Portal">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&family=Playfair+Display:wght@700;800&display=swap" rel="stylesheet">
+  <!-- Cloudflare Turnstile -->
+  <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?onload=onloadTurnstileCallback&render=explicit" async defer></script>
+</head>
+<body>
+
+<!-- LOGIN / SIGNUP PAGE -->
+<div id="login-page">
+  <div class="login-bg"></div>
+  <div class="login-card">
+    <div class="login-logo">
+      <div class="login-logo-icon">🛡️</div>
+      <div>
+        <div class="login-logo-text">InsurePortal</div>
+        <div class="login-logo-sub">GCPL Insurance Portal · insurance-portal.in</div>
+      </div>
+    </div>
+
+    <!-- Login / Signup Toggle -->
+    <div style="display:flex;gap:0;background:#f8faff;border-radius:12px;padding:3px;margin-bottom:20px;border:1px solid #dde4f0">
+      <button id="tab-login" onclick="showAuthTab('login')" style="flex:1;padding:9px;border-radius:10px;border:none;background:white;color:#1d4ed8;font-weight:700;font-size:13px;cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,.08);font-family:inherit">🔑 Sign In</button>
+      <button id="tab-signup" onclick="showAuthTab('signup')" style="flex:1;padding:9px;border-radius:10px;border:none;background:transparent;color:#64748b;font-weight:600;font-size:13px;cursor:pointer;font-family:inherit">✍️ New Employee? Sign Up</button>
+    </div>
+
+    <!-- LOGIN PANEL -->
+    <div id="login-panel">
+      <div class="login-title">Welcome back</div>
+      <div class="login-sub">Sign in to access your dashboard</div>
+      <div class="role-tabs">
+        <button class="role-tab active" data-role="admin" onclick="setRole('admin')"><span class="dot"></span> Admin</button>
+        <button class="role-tab" data-role="hr" onclick="setRole('hr')"><span class="dot"></span> HR</button>
+        <button class="role-tab" data-role="employee" onclick="setRole('employee')"><span class="dot"></span> Employee</button>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Email Address</label>
+        <input type="email" id="login-email" class="form-input" placeholder="you@company.com">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Password</label>
+        <input type="password" id="login-password" class="form-input" placeholder="••••••••" onkeydown="if(event.key==='Enter')doLogin()">
+      </div>
+      <!-- Cloudflare Turnstile -->
+      <div id="turnstile-login" style="margin-bottom:12px;display:flex;justify-content:center"></div>
+      <button class="btn-login" id="login-btn" onclick="doLogin()">Sign In</button>
+      <div class="login-error" id="login-error"></div>
+    </div>
+
+    <!-- SIGNUP PANEL -->
+    <div id="signup-panel" style="display:none">
+      <div class="login-title">New Employee Registration</div>
+      <div class="login-sub">Fill in your details to create your portal account</div>
+
+      <!-- SINGLE STEP FORM — No emp_id verification required -->
+      <div id="signup-form">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
+          <div class="form-group" style="margin-bottom:0">
+            <label class="form-label">Employee ID <span style="color:#dc2626">*</span></label>
+            <input type="text" id="su-empid" class="form-input" placeholder="e.g. U3-1445" style="text-transform:uppercase">
+          </div>
+          <div class="form-group" style="margin-bottom:0">
+            <label class="form-label">Full Name <span style="color:#dc2626">*</span></label>
+            <input type="text" id="su-name" class="form-input" placeholder="As per records">
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
+          <div class="form-group" style="margin-bottom:0">
+            <label class="form-label">Date of Birth <span style="color:#dc2626">*</span></label>
+            <input type="date" id="su-dob" class="form-input">
+          </div>
+          <div class="form-group" style="margin-bottom:0">
+            <label class="form-label">Gender</label>
+            <select id="su-gender" class="form-input" style="cursor:pointer">
+              <option value="">Select</option>
+              <option value="Male">Male</option>
+              <option value="Female">Female</option>
+              <option value="Other">Other</option>
+            </select>
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
+          <div class="form-group" style="margin-bottom:0">
+            <label class="form-label">Date of Joining <span style="color:#dc2626">*</span></label>
+            <input type="date" id="su-doj" class="form-input">
+          </div>
+          <div class="form-group" style="margin-bottom:0">
+            <label class="form-label">Mobile Number</label>
+            <input type="tel" id="su-mobile" class="form-input" placeholder="10-digit number">
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
+          <div class="form-group" style="margin-bottom:0">
+            <label class="form-label">Department</label>
+            <input type="text" id="su-dept" class="form-input" placeholder="e.g. Operations">
+          </div>
+          <div class="form-group" style="margin-bottom:0">
+            <label class="form-label">Designation</label>
+            <input type="text" id="su-desig" class="form-input" placeholder="e.g. Executive">
+          </div>
+        </div>
+        <div class="form-group" style="margin-bottom:12px">
+          <label class="form-label">Unit <span style="color:#dc2626">*</span></label>
+          <select id="su-unit" class="form-input" style="cursor:pointer">
+            <option value="">— Select Unit —</option>
+            <option value="UNIT -1">Unit -1</option>
+            <option value="UNIT -2">Unit -2</option>
+            <option value="UNIT -3">Unit -3</option>
+            <option value="UNIT -4">Unit -4</option>
+            <option value="Quest">Quest</option>
+            <option value="Corporate">Corporate</option>
+            <option value="Driver">Driver</option>
+            <option value="Other">Other</option>
+          </select>
+        </div>
+        <div class="form-group" style="margin-bottom:12px">
+          <label class="form-label">Monthly CTC GMC (₹) <span style="color:#64748b;font-size:11px">— Company contribution towards GMC premium</span></label>
+          <input type="number" id="su-ctc-gmc" class="form-input" placeholder="e.g. 1500 (enter 0 if not known)" min="0" step="0.01">
+        </div>
+        <div class="form-group" style="margin-bottom:12px">
+          <label class="form-label">Email Address <span style="color:#dc2626">*</span></label>
+          <input type="email" id="su-email" class="form-input" placeholder="your@email.com">
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px">
+          <div class="form-group" style="margin-bottom:0">
+            <label class="form-label">Password <span style="color:#dc2626">*</span></label>
+            <input type="password" id="su-pwd" class="form-input" placeholder="Min 8 characters">
+          </div>
+          <div class="form-group" style="margin-bottom:0">
+            <label class="form-label">Confirm Password <span style="color:#dc2626">*</span></label>
+            <input type="password" id="su-pwd2" class="form-input" placeholder="Re-enter password">
+          </div>
+        </div>
+        <!-- Cloudflare Turnstile -->
+        <div id="turnstile-signup" style="margin-bottom:12px;display:flex;justify-content:center"></div>
+        <button class="btn-login" onclick="doSignup()" id="su-register-btn">Create Account →</button>
+        <div class="login-error" id="su-error" style="display:none"></div>
+      </div>
+    </div>
+
+    <div style="margin-top:18px;padding-top:14px;border-top:1px solid #e2e8f0;font-size:11px;color:#64748b;text-align:center">
+      🔒 Secure portal — all data goes through your backend API
+    </div>
+  </div>
+</div>
+
+<!-- APP -->
+<div id="app">
+  <!-- TOPBAR -->
+  <div class="topbar">
+    <button class="hamburger" id="hamburger-btn" onclick="toggleSidebar()" aria-label="Menu">
+      <span></span><span></span><span></span>
+    </button>
+    <div class="topbar-logo">
+      <div class="topbar-logo-icon">🛡️</div>
+      <div class="topbar-logo-name">InsurePortal</div>
+    </div>
+    <div class="topbar-divider"></div>
+    <div class="topbar-section-title" id="topbar-section">Dashboard</div>
+    <div class="topbar-spacer"></div>
+    <div class="topbar-badge" id="topbar-badge"></div>
+    <div class="topbar-user" id="topbar-user"></div>
+    <button class="btn-logout" onclick="doLogout()">Sign Out</button>
+  </div>
+
+  <!-- MAIN -->
+  <div class="main-layout">
+    <!-- SIDEBAR OVERLAY (mobile) -->
+    <div class="sidebar-overlay" id="sidebar-overlay" onclick="closeSidebar()"></div>
+
+    <!-- SIDEBAR -->
+    <div class="sidebar" id="sidebar">
+
+      <div class="sidebar-section-label">Overview</div>
+      <div class="sidebar-item active" data-page="dashboard" onclick="navigateAndClose(state.role==='employee'?'employee_dashboard':'dashboard')">
+        <span class="icon">🏠</span><span class="label">Dashboard</span>
+      </div>
+
+      <!-- EMPLOYEE ONLY -->
+      <div class="sidebar-section-label" data-employee-only>My Insurance</div>
+      <div class="sidebar-item" data-page="gmc_enrollment_form" data-employee-only onclick="navigateAndClose('gmc_enrollment_form')">
+        <span class="icon">📝</span><span class="label">My GMC Enrollment</span>
+      </div>
+
+      <!-- HR/ADMIN -->
+      <div class="sidebar-section-label" data-admin-only>GMC Management</div>
+      <div class="sidebar-item" data-page="admin_enrollments" data-admin-only onclick="navigateAndClose('admin_enrollments')">
+        <span class="icon">📋</span><span class="label">Enrollment Review</span>
+      </div>
+      <div class="sidebar-item" data-page="ff_statement" data-admin-only onclick="navigateAndClose('ff_statement')">
+        <span class="icon">📑</span><span class="label">F&amp;F GMC Statement</span>
+      </div>
+      <div class="sidebar-item" data-page="t_gmc_exit" data-admin-only onclick="navigateAndClose('t_gmc_exit')">
+        <span class="icon">🚪</span><span class="label">GMC Exit Records</span>
+      </div>
+      <div class="sidebar-item" data-page="t_gmc_enrollment" data-admin-only onclick="navigateAndClose('t_gmc_enrollment')">
+        <span class="icon">🗄️</span><span class="label">Enrollment Table</span>
+      </div>
+
+      <div class="sidebar-section-label" data-admin-only>Employee Data</div>
+      <div class="sidebar-item" data-page="t_employee_onboarding" data-admin-only onclick="navigateAndClose('t_employee_onboarding')">
+        <span class="icon">🧾</span><span class="label">Employee Onboarding</span>
+      </div>
+      <div class="sidebar-item" data-page="t_employees" data-admin-only onclick="navigateAndClose('t_employees')">
+        <span class="icon">👥</span><span class="label">Employees</span>
+      </div>
+      <div class="sidebar-item" data-page="t_blood_group" data-admin-only onclick="navigateAndClose('t_blood_group')">
+        <span class="icon">🩸</span><span class="label">Blood Groups</span>
+      </div>
+      <div class="sidebar-item" data-page="t_gmc_claims" data-admin-only onclick="navigateAndClose('t_gmc_claims')">
+        <span class="icon">🏥</span><span class="label">GMC Claims</span>
+      </div>
+
+      <div class="sidebar-section-label" data-admin-only>Finance & Premiums</div>
+      <div class="sidebar-item" data-page="t_ctc_increment" data-admin-only onclick="navigateAndClose('t_ctc_increment')">
+        <span class="icon">📈</span><span class="label">CTC GMC Increment</span>
+      </div>
+      <div class="sidebar-item" data-page="t_actual_deduction" data-admin-only onclick="navigateAndClose('t_actual_deduction')">
+        <span class="icon">💳</span><span class="label">GMC Actual Deduction</span>
+      </div>
+      <div class="sidebar-item" data-page="t_gmc_financials" data-admin-only onclick="navigateAndClose('t_gmc_financials')">
+        <span class="icon">📊</span><span class="label">GMC Financials 25-26</span>
+      </div>
+      <div class="sidebar-item" data-page="t_gmc_net_balance" data-admin-only onclick="navigateAndClose('t_gmc_net_balance')">
+        <span class="icon">⚖️</span><span class="label">GMC Net Balance</span>
+      </div>
+      <div class="sidebar-item" data-page="t_gmc_opening_balance" data-admin-only onclick="navigateAndClose('t_gmc_opening_balance')">
+        <span class="icon">🏦</span><span class="label">Emp GMC Opening Bal</span>
+      </div>
+      <div class="sidebar-item" data-page="t_insurance_cd_payments" data-admin-only onclick="navigateAndClose('t_insurance_cd_payments')">
+        <span class="icon">💰</span><span class="label">CD Payments</span>
+      </div>
+      <div class="sidebar-item" data-page="t_policy_premium" data-admin-only onclick="navigateAndClose('t_policy_premium')">
+        <span class="icon">📄</span><span class="label">Policy Premium</span>
+      </div>
+      <div class="sidebar-item" data-page="t_gmc_rate_cards" data-admin-only onclick="navigateAndClose('t_gmc_rate_cards')">
+        <span class="icon">🗂️</span><span class="label">GMC Rate Cards</span>
+      </div>
+      <div class="sidebar-item" data-page="t_opening_balance" data-admin-only onclick="navigateAndClose('t_opening_balance')">
+        <span class="icon">🏧</span><span class="label">Insurer Opening Bal</span>
+      </div>
+
+      <div class="sidebar-section-label" data-admin-only>Analytics</div>
+      <div class="sidebar-item" data-page="views" data-admin-only onclick="navigateAndClose('views')">
+        <span class="icon">👁️</span><span class="label">All Views</span>
+      </div>
+      <div class="sidebar-item" data-page="emp_full_view" data-admin-only onclick="navigateAndClose('emp_full_view')">
+        <span class="icon">🔎</span><span class="label">Employee Full View</span>
+      </div>
+
+      <div id="admin-section" style="display:none">
+        <div class="sidebar-section-label">Admin</div>
+        <div class="sidebar-item" data-page="user_management" onclick="navigateAndClose('user_management')">
+          <span class="icon">⚙️</span><span class="label">User Management</span>
+        </div>
+      </div>
+
+      <div class="sidebar-section-label">Support</div>
+      <div class="sidebar-item" data-page="concerns" onclick="navigateAndClose('concerns')">
+        <span class="icon">📝</span><span class="label">Correction Concerns</span>
+      </div>
+    </div>
+
+    <!-- CONTENT -->
+    <div class="content" id="content">
+      <div class="loading"><div class="spinner"></div> Loading…</div>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL -->
+<div class="modal-overlay" id="modal-overlay">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title" id="modal-title">Add Record</div>
+      <button class="modal-close" onclick="closeModal()">×</button>
+    </div>
+    <div class="modal-body" id="modal-body"></div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" id="modal-save-btn" onclick="saveModal()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- TOAST -->
+<div id="toast"></div>
+
+<!-- MOBILE BOTTOM NAV (employee view) -->
+<nav class="mobile-bottom-nav" id="mobile-bottom-nav">
+  <button class="mbn-item" onclick="navigateAndClose(state.role==='employee'?'employee_dashboard':'dashboard')" data-page="dashboard">
+    <span class="mbn-icon">🏠</span>
+    <span class="mbn-label">Home</span>
+  </button>
+  <button class="mbn-item" id="mbn-enroll" onclick="navigateAndClose('gmc_enrollment_form')" data-page="gmc_enrollment_form">
+    <span class="mbn-icon">📝</span>
+    <span class="mbn-label">Enrollment</span>
+  </button>
+  <button class="mbn-item" onclick="toggleSidebar()">
+    <span class="mbn-icon">☰</span>
+    <span class="mbn-label">Menu</span>
+  </button>
+  <button class="mbn-item" onclick="doLogout()">
+    <span class="mbn-icon">🚪</span>
+    <span class="mbn-label">Sign Out</span>
+  </button>
+</nav>
+
+<script type="module" src="/src/main.js"></script>
+</body>
+</html>

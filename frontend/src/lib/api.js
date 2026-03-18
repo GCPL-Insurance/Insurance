@@ -1,0 +1,228 @@
+// lib/api.js — All requests go through the backend. No Supabase keys here.
+
+const API_BASE = import.meta.env.VITE_API_URL || '/api';
+
+// ─── Token management ─────────────────────────────────────────────────────────
+export const tokenStore = {
+  get:         () => localStorage.getItem('ip_token'),
+  set:         (t) => localStorage.setItem('ip_token', t),
+  getRefresh:  () => localStorage.getItem('ip_refresh'),
+  setRefresh:  (t) => localStorage.setItem('ip_refresh', t),
+  clear:       () => {
+    localStorage.removeItem('ip_token');
+    localStorage.removeItem('ip_refresh');
+    localStorage.removeItem('ip_user');
+  },
+  getUser:     () => { try { return JSON.parse(localStorage.getItem('ip_user')); } catch { return null; } },
+  setUser:     (u) => localStorage.setItem('ip_user', JSON.stringify(u)),
+};
+
+let isRefreshing = false;
+let refreshPromise = null;
+
+async function refreshToken() {
+  if (isRefreshing) return refreshPromise;
+  isRefreshing = true;
+  refreshPromise = fetch(`${API_BASE}/auth/refresh`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ refresh_token: tokenStore.getRefresh() }),
+  })
+    .then(r => r.json())
+    .then(data => {
+      if (data.access_token) {
+        tokenStore.set(data.access_token);
+        tokenStore.setRefresh(data.refresh_token);
+        return data.access_token;
+      }
+      tokenStore.clear();
+      window.location.reload();
+      return null;
+    })
+    .finally(() => { isRefreshing = false; refreshPromise = null; });
+  return refreshPromise;
+}
+
+// ── Retry helper: retries once on network-level failures (TypeError: Failed to fetch)
+// This handles Render free-tier cold-start mid-request crashes where the DB write
+// already succeeded but the HTTP response was never sent back to the browser.
+async function fetchWithRetry(url, opts, retries = 1) {
+  try {
+    return await fetch(url, opts);
+  } catch (err) {
+    // Only retry on network errors (TypeError), not on HTTP error responses
+    if (retries > 0 && err instanceof TypeError) {
+      // Wait 2s then retry — gives Render instance time to recover
+      await new Promise(r => setTimeout(r, 2000));
+      return fetchWithRetry(url, opts, retries - 1);
+    }
+    // Re-throw with a friendlier message so the UI shows something useful
+    const friendly = new Error(
+      'Network error — the server may be restarting. ' +
+      'Please wait a moment and refresh the page. ' +
+      'If the action was a save/approve, check the data — it may have already been saved.'
+    );
+    friendly.isNetworkError = true;
+    throw friendly;
+  }
+}
+
+export async function apiFetch(path, options = {}) {
+  const token = tokenStore.get();
+  const headers = {
+    'Content-Type': 'application/json',
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...options.headers,
+  };
+
+  // Determine if this is a mutation (write) — these are most affected by cold-start
+  const isMutation = options.method && ['POST','PATCH','PUT','DELETE'].includes(options.method.toUpperCase());
+
+  let res = await fetchWithRetry(`${API_BASE}${path}`, { ...options, headers }, isMutation ? 1 : 0);
+
+  // Auto-refresh on 401
+  if (res.status === 401 && tokenStore.getRefresh()) {
+    const newToken = await refreshToken();
+    if (newToken) {
+      res = await fetchWithRetry(`${API_BASE}${path}`, {
+        ...options,
+        headers: { ...headers, Authorization: `Bearer ${newToken}` },
+      }, 0);
+    }
+  }
+
+  if (res.status === 401) {
+    tokenStore.clear();
+    window.location.reload();
+    return;
+  }
+
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  return data;
+}
+
+// ─── Auth ─────────────────────────────────────────────────────────────────────
+export const auth = {
+  login: async (email, password, captchaToken) => {
+    const data = await apiFetch('/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ email, password, captchaToken }),
+    });
+    tokenStore.set(data.access_token);
+    tokenStore.setRefresh(data.refresh_token);
+    tokenStore.setUser(data.user);
+    return data.user;
+  },
+  logout: async () => {
+    await apiFetch('/auth/logout', { method: 'POST' }).catch(() => {});
+    tokenStore.clear();
+  },
+  me: () => tokenStore.getUser(),
+  isLoggedIn: () => !!tokenStore.get(),
+  // Validate token with server and get fresh user data
+  validate: async () => {
+    const data = await apiFetch('/auth/me');
+    if (data?.user) {
+      tokenStore.setUser(data.user);
+      return data.user;
+    }
+    return null;
+  },
+};
+
+// ─── Tables ───────────────────────────────────────────────────────────────────
+export const tables = {
+  list: (table, params = {}) => {
+    const qs = new URLSearchParams(params).toString();
+    return apiFetch(`/data/${table}${qs ? '?' + qs : ''}`);
+  },
+  insert: (table, body) =>
+    apiFetch(`/data/${table}`, { method: 'POST', body: JSON.stringify(body) }),
+
+  update: (table, id, body, keyCol = 'id') => {
+    const qs = keyCol !== 'id' ? `?keyCol=${encodeURIComponent(keyCol)}` : '';
+    return apiFetch(`/data/${table}/${id}${qs}`, { method: 'PATCH', body: JSON.stringify(body) });
+  },
+
+  remove: (table, id, keyCol = 'id') => {
+    const qs = keyCol !== 'id' ? `?keyCol=${encodeURIComponent(keyCol)}` : '';
+    return apiFetch(`/data/${table}/${id}${qs}`, { method: 'DELETE' });
+  },
+
+  bulkInsert: (table, rows) =>
+    apiFetch(`/data/${table}/bulk`, { method: 'POST', body: JSON.stringify({ rows }) }),
+};
+
+// ─── Views ────────────────────────────────────────────────────────────────────
+export const views = {
+  fetch: (viewName, params = {}) => {
+    const qs = new URLSearchParams(params).toString();
+    return apiFetch(`/views/${viewName}${qs ? '?' + qs : ''}`);
+  },
+  employeeFull: (empId) => apiFetch(`/views/employee-full/${empId}`),
+};
+
+// ─── Admin ────────────────────────────────────────────────────────────────────
+export const admin = {
+  users: {
+    list:          ()          => apiFetch('/admin/users'),
+    create:        (body)      => apiFetch('/admin/users', { method: 'POST', body: JSON.stringify(body) }),
+    update:        (id, body)  => apiFetch(`/admin/users/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+    remove:        (id)        => apiFetch(`/admin/users/${id}`, { method: 'DELETE' }),
+    resetPassword: (id, pwd)   => apiFetch(`/admin/users/${id}/reset-password`, { method: 'POST', body: JSON.stringify({ password: pwd }) }),
+  },
+};
+
+// ─── Export helpers ───────────────────────────────────────────────────────────
+export const exportData = {
+  table: (table, params) => apiFetch('/export/table', { method: 'POST', body: JSON.stringify({ table, ...params }) }),
+  view:  (view, params)  => apiFetch('/export/view',  { method: 'POST', body: JSON.stringify({ view, ...params }) }),
+};
+
+// ─── Enrollment (employee self-service) ──────────────────────────────────────
+export const enrollment = {
+  // Verify emp_id exists before signup (no auth needed)
+  verifyEmp: (emp_id) =>
+    apiFetch('/auth/verify-emp', { method: 'POST', body: JSON.stringify({ emp_id }) }),
+
+  // GMC Portal: verify emp_id — works even if employee not in DB yet
+  gmcVerifyEmp: (emp_id) =>
+    apiFetch('/auth/gmc-verify-emp', { method: 'POST', body: JSON.stringify({ emp_id }) }),
+
+  // Create account (no auth needed) — for employees already in DB
+  signup: (body, captchaToken) =>
+    apiFetch('/auth/signup', { method: 'POST', body: JSON.stringify({ ...body, captchaToken }) }),
+
+  // GMC Portal: create account for NEW employees NOT yet in DB
+  gmcSignup: (body, captchaToken) =>
+    apiFetch('/auth/gmc-signup', { method: 'POST', body: JSON.stringify({ ...body, captchaToken }) }),
+
+  // Update CTC GMC per month (employee self-service)
+  updateCtc: (ctc_gmc_per_month) =>
+    apiFetch('/auth/update-ctc', { method: 'PATCH', body: JSON.stringify({ ctc_gmc_per_month }) }),
+
+  // Simple signup — no emp_id verification, direct onboarding insert
+  simpleSignup: (body, captchaToken) =>
+    apiFetch('/auth/simple-signup', { method: 'POST', body: JSON.stringify({ ...body, captchaToken }) }),
+
+  // Get employee data + rate cards + existing enrollment (auth required)
+  getData: () => apiFetch('/auth/enrollment-data'),
+
+  // Save draft or submit enrollment
+  save: (body) =>
+    apiFetch('/auth/enrollment', { method: 'POST', body: JSON.stringify({ ...body, action: 'save' }) }),
+  submit: (body) =>
+    apiFetch('/auth/enrollment', { method: 'POST', body: JSON.stringify({ ...body, action: 'submit' }) }),
+};
+
+// ─── Admin Enrollment Review ──────────────────────────────────────────────────
+export const adminEnrollment = {
+  list: (status) => {
+    const qs = status && status !== 'ALL' ? `?status=${status}` : '';
+    return apiFetch(`/admin/enrollments${qs}`);
+  },
+  detail: (id)   => apiFetch(`/admin/enrollments/${id}`),
+  review: (id, action, admin_remarks) =>
+    apiFetch(`/admin/enrollments/${id}`, { method: 'PATCH', body: JSON.stringify({ action, admin_remarks }) }),
+};
