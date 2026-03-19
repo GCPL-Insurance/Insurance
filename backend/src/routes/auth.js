@@ -31,15 +31,9 @@ function normalizeDateForPg(value) {
   if (!value || typeof value !== 'string') return null;
   const raw = value.trim();
   if (!raw) return null;
-
-  // Already ISO-like format
   if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
-
-  // Portal often sends DD-MM-YYYY
   const dmy = raw.match(/^(\d{2})-(\d{2})-(\d{4})$/);
   if (dmy) return `${dmy[3]}-${dmy[2]}-${dmy[1]}`;
-
-  // Let Postgres validate other rare formats by passing raw value
   return raw;
 }
 
@@ -64,16 +58,12 @@ async function verifyCaptcha(token, remoteip) {
   if (!token) return { success: false, error: 'Captcha token missing. Please complete the security check.' };
   const secret = process.env.TURNSTILE_SECRET_KEY;
   if (!secret) {
-    // Skip captcha in dev/test environments
     if (process.env.NODE_ENV !== 'production') return { success: true };
     return { success: false, error: 'Captcha not configured on server.' };
   }
   try {
-    // FIX: Add a 5-second timeout so a slow/unreachable Cloudflare endpoint
-    // never causes login to hang for 60+ seconds.
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 5000);
-
     let resp;
     try {
       resp = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
@@ -85,16 +75,13 @@ async function verifyCaptcha(token, remoteip) {
     } finally {
       clearTimeout(timeoutId);
     }
-
     const result = await resp.json();
     if (!result.success) return { success: false, error: 'Security check failed. Please try again.' };
     return { success: true };
   } catch (err) {
     if (err.name === 'AbortError') {
       console.error('[captcha] verification timed out after 5s — allowing login to proceed');
-      // FIX: On timeout, fail open in production so a Cloudflare outage doesn't
-      // lock all users out. The Turnstile widget on the client already filters bots.
-      return { success: true };
+      return { success: true }; // Fail open: Cloudflare outage must not lock all users out
     }
     console.error('[captcha] verification failed:', err.message);
     return { success: false, error: 'Could not verify security check. Please try again.' };
@@ -103,7 +90,6 @@ async function verifyCaptcha(token, remoteip) {
 
 /**
  * Translate a Supabase auth.admin.createUser error into a friendly message.
- * Also logs the raw error for debugging on Render.
  */
 function friendlyAuthError(authErr, context = '') {
   const msg = authErr?.message || '';
@@ -116,38 +102,31 @@ function friendlyAuthError(authErr, context = '') {
     return { status: 400, error: 'Password too weak. Use at least 8 characters with letters and numbers.' };
   if (/invalid.*email/i.test(msg))
     return { status: 400, error: 'Invalid email address.' };
-  // Generic fallback — don't expose raw Supabase internals
   return { status: 500, error: 'Account creation failed. Please try again or contact HR.' };
 }
 
 // ─── POST /api/auth/gmc-verify-emp ───────────────────────────────────────────
 // Public: check if an emp_id already has an account before showing GMC signup form.
-// ⚠️  Only returns account-existence check — does NOT return salary or PII.
 router.post('/gmc-verify-emp', async (req, res) => {
   const { emp_id } = req.body;
   if (!emp_id || typeof emp_id !== 'string') return res.status(400).json({ error: 'emp_id required' });
 
   const empIdNorm = emp_id.trim().toUpperCase();
 
-  // Check if an account already exists for this emp_id
   const { data: existingProfile } = await supabase
     .from('user_profiles').select('id').eq('emp_id', empIdNorm).single();
   if (existingProfile)
     return res.status(409).json({ error: 'An account already exists for this Employee ID. Please sign in.' });
 
-  // Check for existing pending enrollment
   const { data: existingEnroll } = await supabase
     .from('employee_gmc_enrollment').select('enrollment_id, enrollment_status')
     .eq('emp_id', empIdNorm).order('created_at', { ascending: false }).limit(1).single();
 
-  // Check employee_onboarding first — only return non-sensitive fields for prefill
   const { data: empRecord } = await supabase
     .from('employee_onboarding')
     .select('emp_id, emp_name, department, designation, date_of_joining, gender, date_of_birth, onboarding_status')
-    // ⚠️ SECURITY FIX: ctc_gmc_per_month intentionally excluded from unauthenticated response
     .eq('emp_id', empIdNorm).single();
 
-  // Fallback: check legacy employees table so frontend can choose the right signup path
   let empFallback = null;
   if (!empRecord) {
     const { data } = await supabase
@@ -170,7 +149,6 @@ router.post('/gmc-verify-emp', async (req, res) => {
     date_of_joining: source?.date_of_joining || null,
     gender: source?.gender || null,
     date_of_birth: source?.date_of_birth || null,
-    // ctc_gmc_per_month: intentionally NOT returned here
     existing_enrollment: existingEnroll
       ? { id: existingEnroll.enrollment_id, status: existingEnroll.enrollment_status }
       : null,
@@ -185,25 +163,22 @@ router.post('/gmc-signup', authLimiter, async (req, res) => {
     gender, date_of_birth, department, designation, date_of_joining, mobile_number, unit,
   } = req.body;
 
-  // ── Input validation ──
-  if (!emp_id || !email || !password || !full_name) {
+  if (!emp_id || !email || !password || !full_name)
     return res.status(400).json({ error: 'emp_id, email, password, and full_name are required' });
-  }
+
   const emailErr = validateEmail(email);
   if (emailErr) return res.status(400).json({ error: emailErr });
   const pwErr = validatePassword(password);
   if (pwErr) return res.status(400).json({ error: pwErr });
 
-  // ── Captcha ──
   const captchaResult = await verifyCaptcha(captchaToken, req.ip);
   if (!captchaResult.success) return res.status(400).json({ error: captchaResult.error });
 
   const empIdNorm = emp_id.trim().toUpperCase();
   const emailNorm = email.trim().toLowerCase();
-  const dobNorm = normalizeDateForPg(date_of_birth);
-  const dojNorm = normalizeDateForPg(date_of_joining);
+  const dobNorm   = normalizeDateForPg(date_of_birth);
+  const dojNorm   = normalizeDateForPg(date_of_joining);
 
-  // ── Duplicate checks ──
   const [profileByEmpId, profileByEmail] = await Promise.all([
     supabase.from('user_profiles').select('id').eq('emp_id', empIdNorm).single(),
     supabase.from('user_profiles').select('id').eq('email', emailNorm).single(),
@@ -213,7 +188,6 @@ router.post('/gmc-signup', authLimiter, async (req, res) => {
   if (profileByEmail.data)
     return res.status(409).json({ error: 'This email is already registered. Please sign in.' });
 
-  // ── Create Supabase auth user ──
   const { data: authData, error: authErr } = await supabase.auth.admin.createUser({
     email: emailNorm,
     password,
@@ -225,9 +199,6 @@ router.post('/gmc-signup', authLimiter, async (req, res) => {
     return res.status(status).json({ error });
   }
 
-  // ── Upsert user_profiles record ──
-  // DB trigger on_auth_user_created_profile may insert a row automatically.
-  // Upsert ensures our full data wins without crashing on duplicate key.
   const { error: profileErr } = await supabase.from('user_profiles').upsert({
     id: authData.user.id,
     email: emailNorm,
@@ -236,90 +207,53 @@ router.post('/gmc-signup', authLimiter, async (req, res) => {
     role: 'employee',
     is_active: true,
   }, { onConflict: 'id' });
-  if (profileErr) {
+  if (profileErr)
     console.error('[gmc-signup] user_profiles upsert failed for', empIdNorm,
       '| code:', profileErr.code, '| msg:', profileErr.message);
-    // Non-fatal — auth user exists. employee_auth FK prevents deletion anyway.
-  }
 
-  // ── Ensure onboarding master record exists for GMC signup ──
-  // ── Insert into employee_onboarding ONLY if HR hasn't already created a record ──
   const { data: existingOnboarding } = await supabase
-    .from('employee_onboarding')
-    .select('emp_id')
-    .eq('emp_id', empIdNorm)
-    .single();
+    .from('employee_onboarding').select('emp_id').eq('emp_id', empIdNorm).single();
 
   if (!existingOnboarding) {
     const onboardingPayload = {
-      emp_id:            empIdNorm,
-      emp_name:          full_name,
-      gender:            gender     || null,
-      date_of_birth:     dobNorm    || null,
-      date_of_joining:   dojNorm    || null,
-      department:        department || null,
-      designation:       designation || null,
-      mobile_number:     mobile_number || null,
-      email_id:          emailNorm,
-      unit:              unit || null,
-      onboarding_status: 'pending',
-      // ctc_gmc_per_month intentionally omitted — HR sets this separately
+      emp_id: empIdNorm, emp_name: full_name,
+      gender: gender || null, date_of_birth: dobNorm || null,
+      date_of_joining: dojNorm || null, department: department || null,
+      designation: designation || null, mobile_number: mobile_number || null,
+      email_id: emailNorm, unit: unit || null, onboarding_status: 'pending',
     };
-
     const { error: obErr } = await supabase.from('employee_onboarding').insert(onboardingPayload);
-
     if (obErr) {
       if (isDuplicateKeyError(obErr)) {
-        // Race condition or DB trigger already inserted this row — safe to continue.
-        console.warn('[gmc-signup] employee_onboarding duplicate key for', empIdNorm, '— skipping insert, row already exists.');
+        console.warn('[gmc-signup] employee_onboarding duplicate key for', empIdNorm, '— skipping');
       } else if (isMissingColumnError(obErr)) {
-        // Schema mismatch — log for ops but do NOT block the user from signing in.
-        console.error('[gmc-signup] employee_onboarding column mismatch for', empIdNorm, ':', obErr.message,
-          '| payload keys:', Object.keys(onboardingPayload).join(', '));
+        console.error('[gmc-signup] employee_onboarding column mismatch for', empIdNorm, ':', obErr.message);
       } else {
-        // Unknown DB error — log full details for ops. Auth + profile already succeeded,
-        // so we do NOT rollback (rolling back here would orphan the auth user on retry).
-        // The enrollment-data endpoint has fallbacks; the employee can still use the portal.
         console.error('[gmc-signup] employee_onboarding insert failed for', empIdNorm,
-          '| code:', obErr.code, '| message:', obErr.message,
-          '| details:', obErr.details, '| hint:', obErr.hint);
+          '| code:', obErr.code, '| message:', obErr.message);
       }
-      // ⚠ Non-fatal: Auth user + user_profiles are confirmed created.
-      // Do NOT return an error here — the signup is functionally complete.
     }
   } else {
-    // HR record already present — preserve it, do not overwrite.
     console.log('[gmc-signup] employee_onboarding record already exists for', empIdNorm, '— skipping insert.');
   }
 
-  // ── Create DRAFT enrollment record ──
   const enrollmentPayload = {
-    emp_id: empIdNorm,
-    emp_name: full_name,
-    gender: gender || null,
-    date_of_birth: dobNorm,
-    department: department || null,
-    designation: designation || null,
-    date_of_joining: dojNorm,
-    mobile_number: mobile_number || null,
-    email_id: emailNorm,
-    selected_sum_insured: 0,
-    enrollment_status: 'DRAFT',
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
+    emp_id: empIdNorm, emp_name: full_name,
+    gender: gender || null, date_of_birth: dobNorm,
+    department: department || null, designation: designation || null,
+    date_of_joining: dojNorm, mobile_number: mobile_number || null,
+    email_id: emailNorm, selected_sum_insured: 0,
+    enrollment_status: 'DRAFT', ctc_gmc_per_month: 0,
+    created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
   };
-  enrollmentPayload.ctc_gmc_per_month = 0; // HR can update in onboarding table later
 
   let { error: enrollErr } = await supabase.from('employee_gmc_enrollment').insert(enrollmentPayload);
   if (enrollErr && isMissingColumnError(enrollErr, 'ctc_gmc_per_month')) {
-    // Backward-compatible fallback for DBs that don't yet have this column.
     const { ctc_gmc_per_month, ...payloadWithoutCtc } = enrollmentPayload;
     ({ error: enrollErr } = await supabase.from('employee_gmc_enrollment').insert(payloadWithoutCtc));
   }
-  if (enrollErr) {
-    // Non-fatal: log for ops team to manually create if needed
+  if (enrollErr)
     console.error('[gmc-signup] DRAFT enrollment creation failed for', empIdNorm, ':', enrollErr.message);
-  }
 
   res.status(201).json({
     success: true,
@@ -346,17 +280,12 @@ router.post('/signup', authLimiter, async (req, res) => {
   const empIdNorm = emp_id.trim().toUpperCase();
   const emailNorm = email.trim().toLowerCase();
 
-  // Employee must exist in employees table
   const { data: emp } = await supabase
-    .from('employees')
-    .select('emp_id, emp_name, is_active')
-    .eq('emp_id', empIdNorm)
-    .single();
+    .from('employees').select('emp_id, emp_name, is_active').eq('emp_id', empIdNorm).single();
 
   if (!emp) return res.status(404).json({ error: 'Employee ID not found. Please contact HR.' });
   if (!emp.is_active) return res.status(403).json({ error: 'Employee account is inactive. Contact HR.' });
 
-  // Duplicate check
   const { data: existingProfile } = await supabase
     .from('user_profiles').select('id').eq('emp_id', emp.emp_id).single();
   if (existingProfile)
@@ -368,9 +297,7 @@ router.post('/signup', authLimiter, async (req, res) => {
     return res.status(409).json({ error: 'This email is already registered. Please sign in.' });
 
   const { data: authData, error: authErr } = await supabase.auth.admin.createUser({
-    email: emailNorm,
-    password,
-    email_confirm: true,
+    email: emailNorm, password, email_confirm: true,
     user_metadata: { full_name: full_name || emp.emp_name, emp_id: emp.emp_id, role: 'employee' },
   });
   if (authErr) {
@@ -378,28 +305,17 @@ router.post('/signup', authLimiter, async (req, res) => {
     return res.status(status).json({ error });
   }
 
-  // Upsert to handle DB trigger race condition (on_auth_user_created_profile)
   const { error: profileErr } = await supabase.from('user_profiles').upsert({
-    id: authData.user.id,
-    email: emailNorm,
-    full_name: full_name || emp.emp_name,
-    emp_id: emp.emp_id,
-    role: 'employee',
-    is_active: true,
+    id: authData.user.id, email: emailNorm, full_name: full_name || emp.emp_name,
+    emp_id: emp.emp_id, role: 'employee', is_active: true,
   }, { onConflict: 'id' });
-  if (profileErr) {
+  if (profileErr)
     console.error('[signup] user_profiles upsert failed | code:', profileErr.code, '| msg:', profileErr.message);
-    // Non-fatal — employee_auth FK prevents auth user deletion anyway.
-  }
 
   await supabase.from('employees').update({ auth_uid: authData.user.id }).eq('emp_id', emp.emp_id)
     .catch(e => console.warn('[signup] auth_uid link failed:', e.message));
 
-  res.status(201).json({
-    success: true,
-    message: 'Account created! You can now sign in.',
-    emp_name: emp.emp_name,
-  });
+  res.status(201).json({ success: true, message: 'Account created! You can now sign in.', emp_name: emp.emp_name });
 });
 
 // ─── POST /api/auth/verify-emp ────────────────────────────────────────────────
@@ -411,8 +327,7 @@ router.post('/verify-emp', async (req, res) => {
   const { data: emp } = await supabase
     .from('employees')
     .select('emp_id, emp_name, department, designation, date_of_joining, is_active')
-    .eq('emp_id', emp_id.trim().toUpperCase())
-    .single();
+    .eq('emp_id', emp_id.trim().toUpperCase()).single();
 
   if (!emp) return res.status(404).json({ error: 'Employee ID not found' });
   if (!emp.is_active) return res.status(403).json({ error: 'Employee account is inactive' });
@@ -434,28 +349,20 @@ router.post('/login', authLimiter, async (req, res) => {
   const captchaResult = await verifyCaptcha(captchaToken, req.ip);
   if (!captchaResult.success) return res.status(400).json({ error: captchaResult.error });
 
-  // FIX: Don't pass captchaToken to server-side signInWithPassword — it's for client-side only
   const { data, error } = await supabase.auth.signInWithPassword({
-    email: email.trim().toLowerCase(),
-    password,
+    email: email.trim().toLowerCase(), password,
   });
   if (error) {
-    // Don't reveal whether email exists — use generic message for auth failures
     console.warn('[login] failed for', email.trim().toLowerCase(), ':', error.message);
     return res.status(401).json({ error: 'Invalid email or password.' });
   }
 
   const { data: profile, error: profileErr } = await supabase
-    .from('user_profiles')
-    .select('role, emp_id, full_name, is_active')
-    .eq('id', data.user.id)
-    .single();
+    .from('user_profiles').select('role, emp_id, full_name, is_active').eq('id', data.user.id).single();
 
-  if (profileErr || !profile) {
+  if (profileErr || !profile)
     return res.status(401).json({ error: 'Account not fully set up. Please contact admin.' });
-  }
   if (!profile.is_active) {
-    // Revoke the session we just created
     await supabase.auth.admin.signOut(data.session.access_token).catch(() => {});
     return res.status(403).json({ error: 'Account is deactivated. Contact admin.' });
   }
@@ -465,11 +372,8 @@ router.post('/login', authLimiter, async (req, res) => {
     refresh_token: data.session.refresh_token,
     expires_at: data.session.expires_at,
     user: {
-      id: data.user.id,
-      email: data.user.email,
-      role: profile.role || 'employee',
-      emp_id: profile.emp_id,
-      full_name: profile.full_name,
+      id: data.user.id, email: data.user.email,
+      role: profile.role || 'employee', emp_id: profile.emp_id, full_name: profile.full_name,
     },
   });
 });
@@ -488,48 +392,70 @@ router.post('/refresh', async (req, res) => {
 });
 
 // ─── POST /api/auth/logout ────────────────────────────────────────────────────
-// Requires a valid JWT — revokes the session server-side
 router.post('/logout', async (req, res) => {
   const authHeader = req.headers.authorization;
   if (authHeader?.startsWith('Bearer ')) {
     const token = authHeader.slice(7);
-    // Verify token first to get user id, then sign out that session
     const { data: { user } } = await supabase.auth.getUser(token);
-    if (user) {
-      // FIX: admin.signOut() takes a JWT, not a user ID — pass the token correctly
+    if (user)
       await supabase.auth.admin.signOut(token).catch(e => console.warn('[logout] signOut failed:', e.message));
-    }
   }
   res.json({ success: true });
 });
 
 // ─── GET /api/auth/enrollment-data ───────────────────────────────────────────
-// Protected: fetch employee data + rate cards for GMC enrollment form.
-// ✅ FIX #2: Now also fetches existing_dependents from employee_gmc_enrollment_insured
-// FIX: uses shared requireAuth middleware instead of inline token handling
+// Protected: fetch employee data + rate cards + existing dependents for GMC enrollment form.
+//
+// FIX: Wrapped Promise.all in try/catch so a Supabase error on ANY of the 5 queries
+// (including the new employee_gmc_enrollment_insured fetch) cannot crash the handler
+// silently and leave the browser hanging on "Submitting...".
+// FIX: depsRes.error is now checked and logged separately — it never blocks the response.
 router.get('/enrollment-data', requireAuth, enrollmentLimiter, async (req, res) => {
   const { emp_id, id: userId } = req.user;
   if (!emp_id) return res.status(400).json({ error: 'No emp_id linked to your account. Contact HR.' });
 
-  const [empRes, rateRes, enrollRes, profileRes, depsRes] = await Promise.all([
-    supabase.from('employee_onboarding')
-      .select('emp_id,emp_name,gender,date_of_birth,department,designation,date_of_joining,ctc_gmc_per_month,onboarding_status,mobile_number,email_id,unit')
-      .eq('emp_id', emp_id).single(),
-    supabase.from('gmc_rate_cards')
-      .select('rate_card_id,rate_card_type,age_band_from,age_band_to,sum_insured,annual_premium')
-      .eq('rate_card_type', 'INSURER').order('sum_insured').order('age_band_from'),
-    supabase.from('employee_gmc_enrollment')
-      .select('*').eq('emp_id', emp_id).order('created_at', { ascending: false }).limit(1),
-    supabase.from('user_profiles')
-      .select('email').eq('id', userId).single(),
-    // ✅ FIX #2: Fetch existing dependents from insured table
-    supabase.from('employee_gmc_enrollment_insured')
-      .select('*').eq('emp_id', emp_id),
-  ]);
+  // ── Fetch all data in parallel ────────────────────────────────────────────
+  // IMPORTANT: Promise.all is wrapped in try/catch. Before this fix, an unhandled
+  // rejection here (e.g. RLS block on employee_gmc_enrollment_insured) would crash
+  // Express mid-request and send NO response, freezing the UI on "Submitting…".
+  let empRes, rateRes, enrollRes, profileRes, depsRes;
+  try {
+    [empRes, rateRes, enrollRes, profileRes, depsRes] = await Promise.all([
+      supabase.from('employee_onboarding')
+        .select('emp_id,emp_name,gender,date_of_birth,department,designation,date_of_joining,ctc_gmc_per_month,onboarding_status,mobile_number,email_id,unit')
+        .eq('emp_id', emp_id).single(),
+      supabase.from('gmc_rate_cards')
+        .select('rate_card_id,rate_card_type,age_band_from,age_band_to,sum_insured,annual_premium')
+        .eq('rate_card_type', 'INSURER').order('sum_insured').order('age_band_from'),
+      supabase.from('employee_gmc_enrollment')
+        .select('*').eq('emp_id', emp_id).order('created_at', { ascending: false }).limit(1),
+      supabase.from('user_profiles')
+        .select('email').eq('id', userId).single(),
+      // NOTE: This query was added 2 days ago. If the table has no RLS SELECT policy
+      // for the employee role, Supabase returns an error object (not an exception).
+      // We handle it below with a separate depsRes.error check so it never crashes.
+      supabase.from('employee_gmc_enrollment_insured')
+        .select('*').eq('emp_id', emp_id),
+    ]);
+  } catch (err) {
+    // Should not happen with Supabase client (it resolves errors, not rejects),
+    // but guard anyway against any unexpected network-level throw.
+    console.error('[enrollment-data] Promise.all threw unexpectedly:', err.message);
+    return res.status(500).json({ error: 'Failed to load enrollment data. Please refresh and try again.' });
+  }
 
+  // Log RLS/permission errors on the insured table without crashing the response.
+  // ACTION REQUIRED: If you see this log, add a SELECT RLS policy on
+  // employee_gmc_enrollment_insured allowing employees to read rows where emp_id matches.
+  if (depsRes?.error) {
+    console.error('[enrollment-data] employee_gmc_enrollment_insured query failed:',
+      depsRes.error.message, '| code:', depsRes.error.code,
+      '| hint: add RLS SELECT policy for employee role on this table');
+  }
+
+  // ── Resolve employee record with fallback chain ───────────────────────────
   let employeeData = empRes.data;
 
-  // Fallback: build from draft enrollment if not in onboarding table yet
   if (!employeeData && enrollRes.data?.[0]) {
     const e = enrollRes.data[0];
     employeeData = {
@@ -541,7 +467,6 @@ router.get('/enrollment-data', requireAuth, enrollmentLimiter, async (req, res) 
     };
   }
 
-  // Last resort: build minimal object from user_profiles so frontend doesn't crash
   if (!employeeData) {
     const { data: profileFallback } = await supabase
       .from('user_profiles').select('emp_id, full_name, email').eq('id', userId).single();
@@ -553,15 +478,15 @@ router.get('/enrollment-data', requireAuth, enrollmentLimiter, async (req, res) 
         designation: null, date_of_joining: null,
         ctc_gmc_per_month: 0, onboarding_status: 'pending',
         _is_new_employee: true,
-        _profile_only: true, // signals frontend: critical fields missing, contact HR
+        _profile_only: true,
       };
     } else {
       return res.status(404).json({ error: 'Employee record not found. Please contact HR.' });
     }
   }
 
-  // mobile_number and email_id now live in employee_onboarding — single source of truth
   const enrollmentDraft = enrollRes.data?.[0] || null;
+
   res.json({
     employee: employeeData,
     rate_cards: rateRes.data || [],
@@ -570,22 +495,26 @@ router.get('/enrollment-data', requireAuth, enrollmentLimiter, async (req, res) 
       mobile_number: empRes.data?.mobile_number || enrollmentDraft?.mobile_number || null,
       email:         empRes.data?.email_id       || profileRes.data?.email         || enrollmentDraft?.email_id || null,
     },
-    // ✅ FIX #2: Return existing dependents so frontend can populate form
-    existing_dependents: depsRes.data || [],
+    // Returns [] on RLS error so the form still loads — employee can re-add dependents.
+    // Fix the RLS policy in Supabase to restore pre-population of saved dependents.
+    existing_dependents: depsRes?.data || [],
   });
 });
 
 // ─── POST /api/auth/enrollment ────────────────────────────────────────────────
 // Protected: save or submit GMC enrollment.
-// FIX: uses shared requireAuth middleware; insured_members handled atomically
+//
+// FIX: Replaced fragile res.status/res.json monkey-patching with a clean try/catch
+// wrapping the entire handler body. The old override broke when Express's internal
+// error handler called res.status(500).json() on an uncaught error, causing either
+// a double-response or no response at all, leaving the browser stuck on "Submitting…".
 router.post('/enrollment', requireAuth, enrollmentLimiter, async (req, res) => {
   const { emp_id } = req.user;
   if (!emp_id) return res.status(400).json({ error: 'No emp_id linked to your account.' });
 
-  // Hard timeout: if the DB takes more than 25s, respond with a clear 503 instead
-  // of letting Render's load balancer silently drop the TCP connection (which causes
-  // the browser to see a network error with no message and hang on "Submitting...").
-  // The frontend's isNetworkError path will then verify DB state and recover.
+  // Hard timeout: if DB takes more than 25s, send a clear 503 instead of letting
+  // Render's load balancer silently drop the TCP connection.
+  // The frontend's isTimeout path will then verify DB state and recover gracefully.
   let responded = false;
   const timeoutHandle = setTimeout(() => {
     if (!responded) {
@@ -596,170 +525,154 @@ router.post('/enrollment', requireAuth, enrollmentLimiter, async (req, res) => {
         _timeout: true,
       });
     }
-  }, 25000); // 25s — well under Render's 55s idle timeout
+  }, 25000);
 
-  // Wrap the original res.json so we can cancel the timeout and set responded flag
-  const _origJson = res.json.bind(res);
-  res.json = function(body) {
-    if (!responded) {
-      responded = true;
-      clearTimeout(timeoutHandle);
+  // Helper to send a response and cancel the timeout atomically.
+  // Always use this instead of res.json/res.status directly inside the handler.
+  function send(statusCode, body) {
+    if (responded) return; // timeout already fired — don't double-respond
+    responded = true;
+    clearTimeout(timeoutHandle);
+    res.status(statusCode).json(body);
+  }
+
+  try {
+    const { action, enrollment, insured_members, summary } = req.body;
+
+    if (!['save', 'submit'].includes(action))
+      return send(400, { error: 'action must be "save" or "submit"' });
+    if (!enrollment || typeof enrollment !== 'object')
+      return send(400, { error: 'enrollment data is required' });
+
+    // ── Lock check ───────────────────────────────────────────────────────────
+    const { data: existing } = await supabase
+      .from('employee_gmc_enrollment').select('enrollment_id, enrollment_status')
+      .eq('emp_id', emp_id).order('created_at', { ascending: false }).limit(1).single();
+
+    if (existing?.enrollment_status === 'APPROVED')
+      return send(403, { error: 'Enrollment is already approved and locked.' });
+
+    // ── Idempotent re-submit (Render cold-start / network retry scenario) ────
+    // First request saved OK but the TCP response was dropped before reaching
+    // the browser. fetchWithRetry fires again 2s later. Detect and return success.
+    if (existing?.enrollment_status === 'SUBMITTED' && action === 'submit') {
+      const { data: existingMembers } = await supabase
+        .from('employee_gmc_enrollment_insured').select('*').eq('enrollment_id', existing.enrollment_id);
+      return send(200, {
+        success: true,
+        enrollment_id: existing.enrollment_id,
+        status: 'SUBMITTED',
+        insured_members: existingMembers || [],
+        _retry: true,
+      });
     }
-    return _origJson(body);
-  };
-  const _origStatus = res.status.bind(res);
-  res.status = function(code) {
-    const chained = _origStatus(code);
-    chained.json = function(body) {
-      if (!responded) {
-        responded = true;
-        clearTimeout(timeoutHandle);
-      }
-      return _origJson.call(res, body);
+
+    const enrollmentStatus = action === 'submit' ? 'SUBMITTED' : 'DRAFT';
+    const now = new Date().toISOString();
+
+    // ── Build enrollment payload — emp_id always from JWT ────────────────────
+    const enrollmentData = {
+      ...enrollment,
+      emp_id,                 // override — never trust client body
+      enrollment_status: enrollmentStatus,
+      updated_at: now,
+      ...(action === 'submit' ? { submitted_at: now } : {}),
     };
-    return chained;
-  };
 
-  const { action, enrollment, insured_members, summary } = req.body;
-  if (!['save', 'submit'].includes(action)) {
-    return res.status(400).json({ error: 'action must be "save" or "submit"' });
-  }
-  if (!enrollment || typeof enrollment !== 'object') {
-    return res.status(400).json({ error: 'enrollment data is required' });
-  }
+    // Strip admin-only fields employees must never set
+    delete enrollmentData.admin_remarks;
+    delete enrollmentData.reviewed_by;
+    delete enrollmentData.reviewed_at;
+    delete enrollmentData.locked_at;
+    delete enrollmentData.locked_by;
 
-  // Check if enrollment is already locked (approved or submitted)
-  const { data: existing } = await supabase
-    .from('employee_gmc_enrollment').select('enrollment_id, enrollment_status')
-    .eq('emp_id', emp_id).order('created_at', { ascending: false }).limit(1).single();
-
-  if (existing?.enrollment_status === 'APPROVED') {
-    return res.status(403).json({ error: 'Enrollment is already approved and locked.' });
-  }
-
-  // If already SUBMITTED and action is submit again (Render cold-start retry scenario):
-  // The first request saved the data but the TCP response was dropped before reaching
-  // the browser. fetchWithRetry fired the request again 2s later. We detect this and
-  // return success immediately — but we MUST also return insured_members so the
-  // frontend can update its state and show the success modal correctly.
-  if (existing?.enrollment_status === 'SUBMITTED' && action === 'submit') {
-    const { data: existingMembers } = await supabase
-      .from('employee_gmc_enrollment_insured')
-      .select('*')
-      .eq('enrollment_id', existing.enrollment_id);
-    return res.json({
-      success: true,
-      enrollment_id: existing.enrollment_id,
-      status: 'SUBMITTED',
-      insured_members: existingMembers || [],
-      _retry: true, // diagnostic flag — visible in server logs
-    });
-  }
-
-  const enrollmentStatus = action === 'submit' ? 'SUBMITTED' : 'DRAFT';
-  const now = new Date().toISOString();
-
-  // Build enrollment data — force emp_id from JWT, never from body
-  const enrollmentData = {
-    ...enrollment,
-    emp_id, // override — never trust body
-    enrollment_status: enrollmentStatus,
-    updated_at: now,
-    ...(action === 'submit' ? { submitted_at: now } : {}),
-  };
-
-  // Strip fields employees must not set
-  delete enrollmentData.admin_remarks;
-  delete enrollmentData.reviewed_by;
-  delete enrollmentData.reviewed_at;
-  delete enrollmentData.locked_at;
-  delete enrollmentData.locked_by;
-
-  let enrollmentId;
-  if (existing) {
-    const { data: updated, error: upErr } = await supabase
-      .from('employee_gmc_enrollment')
-      .update(enrollmentData)
-      .eq('enrollment_id', existing.enrollment_id)
-      .select('enrollment_id').single();
-    if (upErr) return res.status(400).json({ error: upErr.message });
-    enrollmentId = updated.enrollment_id;
-  } else {
-    const { data: inserted, error: insErr } = await supabase
-      .from('employee_gmc_enrollment')
-      .insert({ ...enrollmentData, created_at: now })
-      .select('enrollment_id').single();
-    if (insErr) return res.status(400).json({ error: insErr.message });
-    enrollmentId = inserted.enrollment_id;
-  }
-
-  // Save insured members — delete old first, then insert new (atomic and retry-safe)
-  if (Array.isArray(insured_members) && enrollmentId) {
-    if (insured_members.length > 0) {
-      const membersToInsert = insured_members.map(m => ({
-        ...m,
-        enrollment_id: enrollmentId,
-        emp_id, // force from JWT
-        created_at: now,
-      }));
-      // Remove fields they shouldn't be setting
-      membersToInsert.forEach(m => { delete m.insured_id; });
-
-      // ✅ FIX: Delete ALL existing members FIRST, then insert fresh.
-      // Previously used a timestamp comparison that broke on retry (cold-start):
-      // if first call saved but response was lost, second call would try to insert
-      // duplicates and fail. Now we always clear + re-insert, which is idempotent.
-      await supabase.from('employee_gmc_enrollment_insured')
-        .delete().eq('enrollment_id', enrollmentId);
-
-      const { error: membInsErr } = await supabase
-        .from('employee_gmc_enrollment_insured').insert(membersToInsert);
-      if (membInsErr) {
-        console.error('[enrollment] insured_members insert failed:', membInsErr.message);
-        return res.status(400).json({ error: 'Failed to save insured members: ' + membInsErr.message });
-      }
+    // ── Upsert enrollment record ──────────────────────────────────────────────
+    let enrollmentId;
+    if (existing) {
+      const { data: updated, error: upErr } = await supabase
+        .from('employee_gmc_enrollment')
+        .update(enrollmentData)
+        .eq('enrollment_id', existing.enrollment_id)
+        .select('enrollment_id').single();
+      if (upErr) return send(400, { error: upErr.message });
+      enrollmentId = updated.enrollment_id;
     } else {
-      // Empty array = remove all members
-      await supabase.from('employee_gmc_enrollment_insured').delete().eq('enrollment_id', enrollmentId);
+      const { data: inserted, error: insErr } = await supabase
+        .from('employee_gmc_enrollment')
+        .insert({ ...enrollmentData, created_at: now })
+        .select('enrollment_id').single();
+      if (insErr) return send(400, { error: insErr.message });
+      enrollmentId = inserted.enrollment_id;
     }
+
+    // ── Save insured members — delete-then-insert for idempotency ────────────
+    if (Array.isArray(insured_members) && enrollmentId) {
+      if (insured_members.length > 0) {
+        const membersToInsert = insured_members.map(m => ({
+          ...m,
+          enrollment_id: enrollmentId,
+          emp_id,           // force from JWT
+          created_at: now,
+        }));
+        membersToInsert.forEach(m => { delete m.insured_id; });
+
+        // Delete ALL existing members first, then re-insert fresh.
+        // This is idempotent: if the response was lost and the client retries,
+        // we clear and re-write rather than attempting to diff.
+        await supabase.from('employee_gmc_enrollment_insured')
+          .delete().eq('enrollment_id', enrollmentId);
+
+        const { error: membInsErr } = await supabase
+          .from('employee_gmc_enrollment_insured').insert(membersToInsert);
+        if (membInsErr) {
+          console.error('[enrollment] insured_members insert failed:', membInsErr.message);
+          return send(400, { error: 'Failed to save insured members: ' + membInsErr.message });
+        }
+      } else {
+        // Empty array = remove all members
+        await supabase.from('employee_gmc_enrollment_insured')
+          .delete().eq('enrollment_id', enrollmentId);
+      }
+    }
+
+    // ── Save summary (non-fatal) ──────────────────────────────────────────────
+    if (summary && enrollmentId) {
+      await supabase.from('employee_gmc_enrollment_summary').upsert(
+        { ...summary, enrollment_id: enrollmentId, emp_id, calculated_at: now },
+        { onConflict: 'enrollment_id' }
+      ).catch(e => console.warn('[enrollment] summary upsert failed:', e.message));
+    }
+
+    // ── Audit trail (non-fatal) ───────────────────────────────────────────────
+    await supabase.from('employee_gmc_enrollment_audit').insert({
+      enrollment_id: enrollmentId, emp_id,
+      action: action === 'submit' ? 'SUBMIT' : 'DRAFT_SAVE',
+      action_by: emp_id, created_at: now,
+    }).catch(e => console.warn('[enrollment] audit insert failed:', e.message));
+
+    // ── Fetch fresh insured_members for response ──────────────────────────────
+    // Return the DB-confirmed list so the frontend doesn't need a separate re-fetch.
+    const { data: freshMembers } = await supabase
+      .from('employee_gmc_enrollment_insured').select('*').eq('enrollment_id', enrollmentId);
+
+    send(200, {
+      success: true,
+      enrollment_id: enrollmentId,
+      status: enrollmentStatus,
+      insured_members: freshMembers || [],
+    });
+
+  } catch (err) {
+    // Catch any unexpected throw (e.g. Supabase client network error, JSON parse fail).
+    // Without this, Express would send a 500 HTML error page through its own handler,
+    // bypassing our timeout guard and leaving the browser with no parseable response.
+    console.error('[enrollment] unexpected error for emp_id:', emp_id, '|', err.message);
+    send(500, { error: 'An unexpected error occurred. Please refresh and try again.' });
   }
-
-  // Save summary
-  if (summary && enrollmentId) {
-    await supabase.from('employee_gmc_enrollment_summary').upsert(
-      { ...summary, enrollment_id: enrollmentId, emp_id, calculated_at: now },
-      { onConflict: 'enrollment_id' }
-    ).catch(e => console.warn('[enrollment] summary upsert failed:', e.message));
-  }
-
-  // Audit trail
-  await supabase.from('employee_gmc_enrollment_audit').insert({
-    enrollment_id: enrollmentId,
-    emp_id,
-    action: action === 'submit' ? 'SUBMIT' : 'DRAFT_SAVE',
-    action_by: emp_id,
-    created_at: now,
-  }).catch(e => console.warn('[enrollment] audit insert failed:', e.message));
-
-  // ✅ FIX #1: Fetch and return fresh insured_members in response
-  // This allows frontend to update state immediately without re-fetching
-  const { data: freshMembers } = await supabase
-    .from('employee_gmc_enrollment_insured')
-    .select('*')
-    .eq('enrollment_id', enrollmentId);
-
-  res.json({ 
-    success: true, 
-    enrollment_id: enrollmentId, 
-    status: enrollmentStatus,
-    // ✅ FIX #1: Include fresh members so frontend has complete data
-    insured_members: freshMembers || [],
-  });
 });
 
 // ─── POST /api/auth/simple-signup ─────────────────────────────────────────────
 // Public: Simplified employee self-registration — no FK check, direct onboarding insert.
-// Employee fills in their own details. Completely independent of employees table.
 router.post('/simple-signup', authLimiter, async (req, res) => {
   const {
     emp_id, emp_name, email, password, captchaToken,
@@ -767,25 +680,21 @@ router.post('/simple-signup', authLimiter, async (req, res) => {
     department, designation, mobile_number, ctc_gmc_per_month, unit,
   } = req.body;
 
-  // ── Input validation ──
-  if (!emp_id || !emp_name || !email || !password) {
+  if (!emp_id || !emp_name || !email || !password)
     return res.status(400).json({ error: 'emp_id, emp_name, email, and password are required' });
-  }
   const emailErr = validateEmail(email);
   if (emailErr) return res.status(400).json({ error: emailErr });
   const pwErr = validatePassword(password);
   if (pwErr) return res.status(400).json({ error: pwErr });
 
-  // ── Captcha ──
   const captchaResult = await verifyCaptcha(captchaToken, req.ip);
   if (!captchaResult.success) return res.status(400).json({ error: captchaResult.error });
 
-  const empIdNorm  = emp_id.trim().toUpperCase();
-  const emailNorm  = email.trim().toLowerCase();
-  const dobNorm    = normalizeDateForPg(date_of_birth);
-  const dojNorm    = normalizeDateForPg(date_of_joining);
+  const empIdNorm = emp_id.trim().toUpperCase();
+  const emailNorm = email.trim().toLowerCase();
+  const dobNorm   = normalizeDateForPg(date_of_birth);
+  const dojNorm   = normalizeDateForPg(date_of_joining);
 
-  // ── Check if account already exists ──
   const [profileByEmpId, profileByEmail] = await Promise.all([
     supabase.from('user_profiles').select('id').eq('emp_id', empIdNorm).single(),
     supabase.from('user_profiles').select('id').eq('email', emailNorm).single(),
@@ -795,11 +704,8 @@ router.post('/simple-signup', authLimiter, async (req, res) => {
   if (profileByEmail.data)
     return res.status(409).json({ error: 'This email is already registered. Please sign in.' });
 
-  // ── Create Supabase auth user ──
   const { data: authData, error: authErr } = await supabase.auth.admin.createUser({
-    email: emailNorm,
-    password,
-    email_confirm: true,
+    email: emailNorm, password, email_confirm: true,
     user_metadata: { full_name: emp_name, emp_id: empIdNorm, role: 'employee' },
   });
   if (authErr) {
@@ -807,52 +713,29 @@ router.post('/simple-signup', authLimiter, async (req, res) => {
     return res.status(status).json({ error });
   }
 
-  // ── Upsert user_profiles record ──
-  // IMPORTANT: A DB trigger (on_auth_user_created_profile) fires when the auth
-  // user is created and may already insert a row into user_profiles — causing
-  // a duplicate key if we INSERT. We UPSERT so our full data always wins.
-  // We also NEVER rollback the auth user because employee_auth FK prevents deletion.
   const { error: profileErr } = await supabase.from('user_profiles').upsert({
-    id: authData.user.id,
-    email: emailNorm,
-    full_name: emp_name,
-    emp_id: empIdNorm,
-    role: 'employee',
-    is_active: true,
+    id: authData.user.id, email: emailNorm, full_name: emp_name,
+    emp_id: empIdNorm, role: 'employee', is_active: true,
   }, { onConflict: 'id' });
-
-  if (profileErr) {
-    // Log but do NOT return error — auth user exists, trigger may have partial profile.
-    // employee_auth FK means we cannot delete the auth user anyway.
+  if (profileErr)
     console.error('[simple-signup] user_profiles upsert failed for', empIdNorm,
       '| code:', profileErr.code, '| msg:', profileErr.message);
-    // Non-fatal: continue to onboarding insert.
-  }
 
-  // ── Insert into employee_onboarding — COMPLETELY INDEPENDENT, no FK checks ──
   const { data: existingOnboarding } = await supabase
     .from('employee_onboarding').select('emp_id').eq('emp_id', empIdNorm).single();
 
   if (!existingOnboarding) {
     const onboardingPayload = {
-      emp_id:            empIdNorm,
-      emp_name:          emp_name,
-      gender:            gender || null,
-      date_of_birth:     dobNorm || null,
-      date_of_joining:   dojNorm || null,
-      department:        department || null,
-      designation:       designation || null,
-      mobile_number:     mobile_number || null,
-      email_id:          emailNorm,
-      unit:              unit || null,
+      emp_id: empIdNorm, emp_name, gender: gender || null,
+      date_of_birth: dobNorm || null, date_of_joining: dojNorm || null,
+      department: department || null, designation: designation || null,
+      mobile_number: mobile_number || null, email_id: emailNorm, unit: unit || null,
       ctc_gmc_per_month: ctc_gmc_per_month != null ? Number(ctc_gmc_per_month) : null,
       onboarding_status: 'pending',
     };
     const { error: obErr } = await supabase.from('employee_onboarding').insert(onboardingPayload);
-    if (obErr && !isDuplicateKeyError(obErr)) {
+    if (obErr && !isDuplicateKeyError(obErr))
       console.error('[simple-signup] employee_onboarding insert failed for', empIdNorm, ':', obErr.message);
-      // Non-fatal — auth user is created, portal access works
-    }
   }
 
   console.log('[simple-signup] account created for', empIdNorm, '/', emailNorm);
@@ -861,24 +744,19 @@ router.post('/simple-signup', authLimiter, async (req, res) => {
 
 // ─── PATCH /api/auth/update-ctc ──────────────────────────────────────────────
 // Protected: Employee updates their own ctc_gmc_per_month in employee_onboarding.
-// Only allowed if HR has not yet locked the value (i.e. ctc_gmc_per_month is null or 0).
 router.patch('/update-ctc', requireAuth, async (req, res) => {
   const { emp_id } = req.user;
   if (!emp_id) return res.status(400).json({ error: 'No emp_id on account.' });
 
   const { ctc_gmc_per_month } = req.body;
-  if (ctc_gmc_per_month === undefined || ctc_gmc_per_month === null || isNaN(Number(ctc_gmc_per_month))) {
+  if (ctc_gmc_per_month === undefined || ctc_gmc_per_month === null || isNaN(Number(ctc_gmc_per_month)))
     return res.status(400).json({ error: 'ctc_gmc_per_month must be a number.' });
-  }
 
   const ctcVal = Number(ctc_gmc_per_month);
   if (ctcVal < 0) return res.status(400).json({ error: 'CTC GMC cannot be negative.' });
 
-  // Upsert into employee_onboarding — only update ctc_gmc_per_month
   const { error } = await supabase
-    .from('employee_onboarding')
-    .update({ ctc_gmc_per_month: ctcVal })
-    .eq('emp_id', emp_id);
+    .from('employee_onboarding').update({ ctc_gmc_per_month: ctcVal }).eq('emp_id', emp_id);
 
   if (error) {
     console.error('[update-ctc] failed for', emp_id, ':', error.message);
@@ -887,6 +765,17 @@ router.patch('/update-ctc', requireAuth, async (req, res) => {
 
   console.log('[update-ctc] emp_id', emp_id, 'set ctc_gmc_per_month =', ctcVal);
   res.json({ success: true, ctc_gmc_per_month: ctcVal });
+});
+
+// ─── GET /api/auth/me ─────────────────────────────────────────────────────────
+// Protected: validate token and return fresh user data.
+router.get('/me', requireAuth, async (req, res) => {
+  const { id: userId } = req.user;
+  const { data: profile, error } = await supabase
+    .from('user_profiles').select('role, emp_id, full_name, is_active, email').eq('id', userId).single();
+  if (error || !profile) return res.status(401).json({ error: 'Profile not found.' });
+  if (!profile.is_active) return res.status(403).json({ error: 'Account is deactivated.' });
+  res.json({ user: { id: userId, ...profile } });
 });
 
 export default router;

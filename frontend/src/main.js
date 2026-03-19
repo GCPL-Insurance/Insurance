@@ -536,7 +536,7 @@ async function _origRenderEmployeeDashboard() {
     </div>
 
     <!-- Health + Vaccination -->
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px">
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:20px">
       <div>
         <div style="font-size:15px;font-weight:700;margin-bottom:12px;color:#0f172a">🩺 Health Checkups</div>
         ${health.length === 0 ? '<div class="empty-state" style="padding:20px"><div class="icon">📭</div>No records</div>' : `
@@ -1768,13 +1768,20 @@ async function renderEnrollmentForm() {
     // ✅ FIX #2: POPULATE EXISTING DEPENDENTS FROM API RESPONSE
     // The backend now returns existing_dependents from employee_gmc_enrollment_insured table
     if (data.existing_dependents && Array.isArray(data.existing_dependents)) {
-      enrollState.dependents = data.existing_dependents.map(dep => ({
-        name: dep.insured_name,
-        relationship: dep.relationship,
-        dob: dep.date_of_birth,
-        gender: dep.gender,
-        sumInsured: dep.sum_insured,
-      }));
+      // FIX: Filter out 'Self' — Self is always added from emp record in buildEnrollmentPayload.
+      // Without this filter, when the employee saves/submits and then returns (e.g. after a
+      // correction request), the Self row saved in employee_gmc_enrollment_insured gets loaded
+      // back into enrollState.dependents, causing Self to appear duplicated in the dependents
+      // table and also double-counted in the premium calculation.
+      enrollState.dependents = data.existing_dependents
+        .filter(dep => dep.relationship !== 'Self')
+        .map(dep => ({
+          name: dep.insured_name,
+          relationship: dep.relationship,
+          dob: dep.date_of_birth,
+          gender: dep.gender,
+          sumInsured: dep.sum_insured,
+        }));
     } else {
       enrollState.dependents = [];
     }
@@ -1890,7 +1897,7 @@ function renderEnrollmentLocked(enrollment) {
           ? 'Your GMC enrollment has been <strong>approved</strong> by HR/Admin. The form is locked. Your coverage is active.'
           : 'Your enrollment has been <strong>successfully submitted</strong> and is locked pending HR/Admin review. You will be notified once approved.'}
       </div>
-      <div style="display:inline-flex;gap:16px;background:var(--bg);padding:16px 24px;border-radius:12px;font-size:14px">
+      <div style="display:flex;flex-wrap:wrap;gap:12px 16px;background:var(--bg);padding:16px 24px;border-radius:12px;font-size:14px">
         <span>Sum Insured: <strong>${enrollFmt(Number(enrollment.selected_sum_insured))}</strong></span>
         <span>·</span>
         <span>Submitted: <strong>${fmtDate(enrollment.submitted_at) || '—'}</strong></span>
@@ -1904,13 +1911,13 @@ function renderEnrollmentLocked(enrollment) {
 function enrollStepBar(activeStep) {
   const steps = ['Policy T&C', 'Your Details', 'Dependents & Premium', 'Submit'];
   return `
-    <div style="display:flex;gap:0;background:white;border:1px solid var(--border);border-radius:12px;padding:5px;margin-bottom:24px;box-shadow:var(--shadow-sm)">
+    <div style="display:flex;flex-wrap:wrap;gap:0;background:white;border:1px solid var(--border);border-radius:12px;padding:5px;margin-bottom:24px;box-shadow:var(--shadow-sm)">
       ${steps.map((lbl, i) => {
         const n = i + 1;
         const isDone = n < activeStep;
         const isActive = n === activeStep;
         return `
-          <div style="flex:1;display:flex;flex-direction:column;align-items:center;padding:10px 6px;border-radius:8px;${isActive?'background:#dbeafe;':''}${isDone?'background:#d1fae5;':''}">
+          <div style="flex:1;min-width:70px;display:flex;flex-direction:column;align-items:center;padding:10px 6px;border-radius:8px;${isActive?'background:#dbeafe;':''}${isDone?'background:#d1fae5;':''}">
             <div style="width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;margin-bottom:4px;
               ${isActive?'background:#1d4ed8;color:white;':''}${isDone?'background:#059669;color:white;':'border:2px solid #cbd5e1;color:#94a3b8;'}">
               ${isDone ? '✓' : n}
@@ -2026,7 +2033,7 @@ function renderEnrollStep2(emp) {
   return `
   <div class="section-card">
     <div class="section-title">👤 Personal & Employment Details</div>
-    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-bottom:4px">
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;margin-bottom:4px">
       <div class="form-group"><label>Employee ID</label><input readonly value="${emp.emp_id}" style="background:var(--bg)"></div>
       <div class="form-group"><label>Full Name</label><input readonly value="${emp.emp_name}" style="background:var(--bg)"></div>
       <div class="form-group"><label>Date of Birth</label><input readonly value="${fmtDate(emp.date_of_birth)}" style="background:var(--bg)"></div>
@@ -2038,7 +2045,7 @@ function renderEnrollStep2(emp) {
       <div class="form-group"><label>Unit</label><input readonly value="${emp.unit||'—'}" style="background:var(--bg)"></div>
     </div>
 
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px">
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px;margin-top:14px">
       <div class="form-group">
         <label>Mobile Number</label>
         ${enrollState.mobile
@@ -2134,7 +2141,7 @@ function renderEnrollStep3() {
           style="background:#fee2e2;border:none;color:var(--danger);cursor:pointer;font-size:12px;font-weight:600;padding:6px 14px;border-radius:8px">✕ Cancel / Remove</button>
       </div>
     </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px">
       <div class="form-group">
         <label>Full Name <span style="color:var(--danger)">*</span></label>
         <input type="text" id="dep-name-input" value="${editingDep.name}" placeholder="Full name"
@@ -2299,7 +2306,7 @@ function renderLivePremiumTable() {
     </div>
 
     <!-- Summary cards -->
-    <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:10px">
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px">
       <div style="background:#1e3a8a;color:white;border-radius:10px;padding:12px;text-align:center">
         <div style="font-size:10px;opacity:.75;text-transform:uppercase;letter-spacing:.05em">Total Premium</div>
         <div style="font-size:18px;font-weight:800;margin-top:4px">${enrollFmt(totalPremium)}</div>
@@ -2430,7 +2437,7 @@ function renderEnrollStep4() {
     <!-- Premium Summary Box -->
     <div style="background:linear-gradient(135deg,#1e3a8a,#1d4ed8);border-radius:14px;padding:24px;color:white;margin-bottom:16px">
       <div style="font-size:15px;font-weight:700;margin-bottom:16px;opacity:.9">📊 Your Premium Summary</div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px">
         <div style="background:rgba(255,255,255,.1);border-radius:10px;padding:14px">
           <div style="font-size:11px;opacity:.75;text-transform:uppercase;letter-spacing:.06em">Total Insurer Premium</div>
           <div style="font-size:22px;font-weight:800;margin-top:4px">${enrollFmt(s.totalPremium)}</div>
@@ -2480,7 +2487,7 @@ function renderEnrollStep5() {
     <div class="section-title">✅ Review & Final Submission</div>
 
     <!-- Review details -->
-    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;font-size:13px;margin-bottom:16px">
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;font-size:13px;margin-bottom:16px">
       <div><span style="color:var(--text3)">Emp ID:</span> <strong>${emp.emp_id}</strong></div>
       <div><span style="color:var(--text3)">Name:</span> <strong>${emp.emp_name}</strong></div>
       <div><span style="color:var(--text3)">DOJ:</span> <strong>${fmtDate(emp.date_of_joining)}</strong></div>
@@ -2631,13 +2638,18 @@ async function submitEnrollment() {
       submitted_at: enrollmentRecord.submitted_at || new Date().toISOString(),
     };
     if (Array.isArray(members) && members.length > 0) {
-      enrollState.dependents = members.map(m => ({
-        name: m.insured_name,
-        relationship: m.relationship,
-        dob: m.date_of_birth,
-        gender: m.gender,
-        sumInsured: m.sum_insured,
-      }));
+      // FIX: Filter out Self — same reason as in renderEnrollmentForm.
+      // After submit/retry, the fresh insured_members from the API includes
+      // the Self row; excluding it prevents Self appearing in the dependents list.
+      enrollState.dependents = members
+        .filter(m => m.relationship !== 'Self')
+        .map(m => ({
+          name: m.insured_name,
+          relationship: m.relationship,
+          dob: m.date_of_birth,
+          gender: m.gender,
+          sumInsured: m.sum_insured,
+        }));
     }
   }
 
@@ -2771,7 +2783,7 @@ async function renderAdminEnrollments() {
         <button class="btn btn-secondary btn-sm" onclick="loadAdminEnrollments('DRAFT')">📝 Draft</button>
       </div>
     </div>
-    <div id="admin-enroll-stats" style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px"></div>
+    <div id="admin-enroll-stats" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:12px;margin-bottom:20px"></div>
     <div id="admin-enroll-table"><div class="loading"><div class="spinner"></div> Loading…</div></div>
   `;
   await loadAdminEnrollments('ALL');
@@ -3878,7 +3890,7 @@ async function generateFFStatement() {
         </div>
 
         <!-- ── Employee Meta ── -->
-        <div class="ff-meta">
+        <div class="ff-meta" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:0">
           <div class="ff-meta-item"><div class="ff-meta-label">Employee ID</div>
             <div class="ff-meta-value">${c.empId}</div></div>
           <div class="ff-meta-item"><div class="ff-meta-label">Employee Name</div>
@@ -3900,7 +3912,7 @@ async function generateFFStatement() {
         <!-- ── Section 1: GMC Summary ── -->
         <div class="ff-section">
           <div class="ff-section-title">🏥 GMC Policy Summary</div>
-          <div class="ff-2col">
+          <div class="ff-2col" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px">
             <div>
               <div class="ff-row">
                 <span class="ff-row-label">Sum Insured (Family Floater)</span>
