@@ -440,10 +440,11 @@ router.get('/enrollment-data', requireAuth, enrollmentLimiter, async (req, res) 
       // If a value exists here it takes precedence over the prorated formula on the frontend.
       supabase.from('vw_employee_ctc_gmc_total')
         .select('total_ctc_gmc').eq('emp_id', emp_id).single(),
-      // Fetch gmc_inclusion_date from the canonical employees table.
-      // This takes priority over date_of_joining for premium proration start date.
+      // Fetch full employee record from the canonical employees table.
+      // employees is the authoritative source — employee_onboarding is the fallback.
       supabase.from('employees')
-        .select('gmc_inclusion_date').eq('emp_id', emp_id).single(),
+        .select('emp_id,emp_name,gender,date_of_birth,department,designation,date_of_joining,ctc_gmc_per_month,unit,gmc_inclusion_date,gmc_effective_date,is_active,status')
+        .eq('emp_id', emp_id).single(),
     ]);
   } catch (err) {
     // Should not happen with Supabase client (it resolves errors, not rejects),
@@ -461,9 +462,46 @@ router.get('/enrollment-data', requireAuth, enrollmentLimiter, async (req, res) 
       '| hint: add RLS SELECT policy for employee role on this table');
   }
 
-  // ── Resolve employee record with fallback chain ───────────────────────────
-  let employeeData = empRes.data;
+  // ── Resolve employee record: employees table is PRIMARY, employee_onboarding is FALLBACK ──
+  //
+  // Priority chain for each field:
+  //   1. public.employees        — canonical HR master, always most complete
+  //   2. public.employee_onboarding — may have been created via self-signup with partial data
+  //   3. employee_gmc_enrollment  — last-resort (enrollment draft may carry some fields)
+  //   4. user_profiles            — absolute last resort (name/email only)
+  //
+  // This fixes the "Incomplete Profile" screen caused by employees whose employee_onboarding
+  // row has null date_of_birth / date_of_joining but whose employees row is fully populated.
 
+  const mainEmp = empMainRes?.data;   // from public.employees
+  const onboarding = empRes?.data;    // from public.employee_onboarding
+
+  // Helper: pick first non-null value across sources
+  const pick = (...vals) => vals.find(v => v !== null && v !== undefined) ?? null;
+
+  let employeeData = null;
+
+  if (mainEmp || onboarding) {
+    employeeData = {
+      emp_id:              pick(mainEmp?.emp_id,              onboarding?.emp_id),
+      emp_name:            pick(mainEmp?.emp_name,            onboarding?.emp_name),
+      gender:              pick(mainEmp?.gender,              onboarding?.gender),
+      date_of_birth:       pick(mainEmp?.date_of_birth,       onboarding?.date_of_birth),
+      date_of_joining:     pick(mainEmp?.date_of_joining,     onboarding?.date_of_joining),
+      department:          pick(mainEmp?.department,          onboarding?.department),
+      designation:         pick(mainEmp?.designation,         onboarding?.designation),
+      ctc_gmc_per_month:   pick(mainEmp?.ctc_gmc_per_month,   onboarding?.ctc_gmc_per_month),
+      mobile_number:       pick(onboarding?.mobile_number,    null),
+      email_id:            pick(onboarding?.email_id,         null),
+      unit:                pick(mainEmp?.unit,                onboarding?.unit),
+      gmc_inclusion_date:  pick(mainEmp?.gmc_inclusion_date,  onboarding?.gmc_inclusion_date),
+      gmc_effective_date:  pick(mainEmp?.gmc_effective_date,  null),
+      onboarding_status:   pick(onboarding?.onboarding_status, 'pending'),
+      _source:             mainEmp ? (onboarding ? 'merged' : 'employees_only') : 'onboarding_only',
+    };
+  }
+
+  // Fallback to enrollment draft fields if both tables missed
   if (!employeeData && enrollRes.data?.[0]) {
     const e = enrollRes.data[0];
     employeeData = {
@@ -471,10 +509,11 @@ router.get('/enrollment-data', requireAuth, enrollmentLimiter, async (req, res) 
       date_of_birth: e.date_of_birth, department: e.department,
       designation: e.designation, date_of_joining: e.date_of_joining,
       ctc_gmc_per_month: e.ctc_gmc_per_month, onboarding_status: 'pending',
-      _is_new_employee: true,
+      gmc_inclusion_date: null, _is_new_employee: true,
     };
   }
 
+  // Last resort: user_profiles (name only — employee will see Incomplete Profile screen)
   if (!employeeData) {
     const { data: profileFallback } = await supabase
       .from('user_profiles').select('emp_id, full_name, email').eq('id', userId).single();
@@ -485,23 +524,16 @@ router.get('/enrollment-data', requireAuth, enrollmentLimiter, async (req, res) 
         gender: null, date_of_birth: null, department: null,
         designation: null, date_of_joining: null,
         ctc_gmc_per_month: 0, onboarding_status: 'pending',
-        _is_new_employee: true,
-        _profile_only: true,
+        gmc_inclusion_date: null, _is_new_employee: true, _profile_only: true,
       };
     } else {
       return res.status(404).json({ error: 'Employee record not found. Please contact HR.' });
     }
   }
 
-  const enrollmentDraft = enrollRes.data?.[0] || null;
+  console.log(`[enrollment-data] emp_id=${emp_id} source=${employeeData._source || 'fallback'} dob=${employeeData.date_of_birth} doj=${employeeData.date_of_joining} gmc_inclusion=${employeeData.gmc_inclusion_date}`);
 
-  // Resolve gmc_inclusion_date: employees table > employee_onboarding > null
-  // The frontend uses this as the premium proration start date (fallback: date_of_joining).
-  const gmcInclusionDate =
-    empMainRes?.data?.gmc_inclusion_date ||
-    empRes?.data?.gmc_inclusion_date ||
-    null;
-  if (employeeData) employeeData.gmc_inclusion_date = gmcInclusionDate;
+  const enrollmentDraft = enrollRes.data?.[0] || null;
 
   res.json({
     employee: employeeData,
