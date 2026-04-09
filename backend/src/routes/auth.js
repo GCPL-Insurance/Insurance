@@ -418,9 +418,9 @@ router.get('/enrollment-data', requireAuth, enrollmentLimiter, async (req, res) 
   // IMPORTANT: Promise.all is wrapped in try/catch. Before this fix, an unhandled
   // rejection here (e.g. RLS block on employee_gmc_enrollment_insured) would crash
   // Express mid-request and send NO response, freezing the UI on "Submitting…".
-  let empRes, rateRes, enrollRes, profileRes, depsRes;
+  let empRes, rateRes, enrollRes, profileRes, depsRes, ctcTotalRes;
   try {
-    [empRes, rateRes, enrollRes, profileRes, depsRes] = await Promise.all([
+    [empRes, rateRes, enrollRes, profileRes, depsRes, ctcTotalRes] = await Promise.all([
       supabase.from('employee_onboarding')
         .select('emp_id,emp_name,gender,date_of_birth,department,designation,date_of_joining,ctc_gmc_per_month,onboarding_status,mobile_number,email_id,unit')
         .eq('emp_id', emp_id).single(),
@@ -436,6 +436,10 @@ router.get('/enrollment-data', requireAuth, enrollmentLimiter, async (req, res) 
       // We handle it below with a separate depsRes.error check so it never crashes.
       supabase.from('employee_gmc_enrollment_insured')
         .select('*').eq('emp_id', emp_id),
+      // Fetch pre-calculated total CTC GMC from the view (sum of slab-timeline).
+      // If a value exists here it takes precedence over the prorated formula on the frontend.
+      supabase.from('vw_employee_ctc_gmc_total')
+        .select('total_ctc_gmc').eq('emp_id', emp_id).single(),
     ]);
   } catch (err) {
     // Should not happen with Supabase client (it resolves errors, not rejects),
@@ -498,6 +502,9 @@ router.get('/enrollment-data', requireAuth, enrollmentLimiter, async (req, res) 
     // Returns [] on RLS error so the form still loads — employee can re-add dependents.
     // Fix the RLS policy in Supabase to restore pre-population of saved dependents.
     existing_dependents: depsRes?.data || [],
+    // Pre-calculated total CTC GMC from vw_employee_ctc_gmc_total.
+    // null means no view row exists for this employee → frontend falls back to proration formula.
+    ctc_gmc_total_from_view: ctcTotalRes?.data?.total_ctc_gmc ?? null,
   });
 });
 

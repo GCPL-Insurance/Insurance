@@ -1655,6 +1655,9 @@ let enrollState = {
   summary: null,
   termsAccepted: false,
   finalAccepted: false,
+  // Pre-calculated total CTC GMC from vw_employee_ctc_gmc_total (server-supplied).
+  // null = no view row → fall back to proration formula in ctcGmcAvailable().
+  ctcGmcTotalFromView: null,
 };
 
 // ✅ FIX: Expose enrollState to window so inline onclick handlers in injected HTML
@@ -1747,7 +1750,10 @@ function calcPremiumSummary() {
   });
 
   const totalPremium = memberRows.reduce((s, r) => s + r.prorated_premium, 0);
-  const totalCtc     = ctcGmcAvailable(Number(emp.ctc_gmc_per_month), doj, emp.unit);
+  // Use view total when available; fall back to proration formula otherwise.
+  const totalCtc     = (enrollState.ctcGmcTotalFromView != null)
+    ? enrollState.ctcGmcTotalFromView
+    : ctcGmcAvailable(Number(emp.ctc_gmc_per_month), doj, emp.unit);
   const deduction    = Math.max(0, totalPremium - totalCtc);
   const refund       = Math.max(0, totalCtc - totalPremium);
 
@@ -1764,6 +1770,10 @@ async function renderEnrollmentForm() {
     enrollState.emp = data.employee;
     enrollState.rateCards = data.rate_cards || [];
     enrollState.existingEnrollment = data.enrollment;
+    // Use pre-calculated total from vw_employee_ctc_gmc_total if the view has a row
+    // for this employee; null means no row → proration formula is used instead.
+    enrollState.ctcGmcTotalFromView = (data.ctc_gmc_total_from_view != null)
+      ? Number(data.ctc_gmc_total_from_view) : null;
 
     // ✅ FIX #2: POPULATE EXISTING DEPENDENTS FROM API RESPONSE
     // The backend now returns existing_dependents from employee_gmc_enrollment_insured table
@@ -2252,7 +2262,10 @@ function renderLivePremiumTable() {
   });
 
   const totalPremium = rows.reduce((s, r) => s + r.prorated, 0);
-  const totalCtc = ctcGmcAvailable(emp.ctc_gmc_per_month || 0, doj, emp.unit);
+  // Use view total when available; fall back to proration formula otherwise.
+  const totalCtc = (enrollState.ctcGmcTotalFromView != null)
+    ? enrollState.ctcGmcTotalFromView
+    : ctcGmcAvailable(emp.ctc_gmc_per_month || 0, doj, emp.unit);
   const deduction = Math.max(0, totalPremium - totalCtc);
   const refund    = Math.max(0, totalCtc - totalPremium);
 
