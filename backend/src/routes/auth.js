@@ -418,11 +418,11 @@ router.get('/enrollment-data', requireAuth, enrollmentLimiter, async (req, res) 
   // IMPORTANT: Promise.all is wrapped in try/catch. Before this fix, an unhandled
   // rejection here (e.g. RLS block on employee_gmc_enrollment_insured) would crash
   // Express mid-request and send NO response, freezing the UI on "Submitting…".
-  let empRes, rateRes, enrollRes, profileRes, depsRes, ctcTotalRes;
+  let empRes, rateRes, enrollRes, profileRes, depsRes, ctcTotalRes, empMainRes;
   try {
-    [empRes, rateRes, enrollRes, profileRes, depsRes, ctcTotalRes] = await Promise.all([
+    [empRes, rateRes, enrollRes, profileRes, depsRes, ctcTotalRes, empMainRes] = await Promise.all([
       supabase.from('employee_onboarding')
-        .select('emp_id,emp_name,gender,date_of_birth,department,designation,date_of_joining,ctc_gmc_per_month,onboarding_status,mobile_number,email_id,unit')
+        .select('emp_id,emp_name,gender,date_of_birth,department,designation,date_of_joining,ctc_gmc_per_month,onboarding_status,mobile_number,email_id,unit,gmc_inclusion_date')
         .eq('emp_id', emp_id).single(),
       supabase.from('gmc_rate_cards')
         .select('rate_card_id,rate_card_type,age_band_from,age_band_to,sum_insured,annual_premium')
@@ -440,6 +440,10 @@ router.get('/enrollment-data', requireAuth, enrollmentLimiter, async (req, res) 
       // If a value exists here it takes precedence over the prorated formula on the frontend.
       supabase.from('vw_employee_ctc_gmc_total')
         .select('total_ctc_gmc').eq('emp_id', emp_id).single(),
+      // Fetch gmc_inclusion_date from the canonical employees table.
+      // This takes priority over date_of_joining for premium proration start date.
+      supabase.from('employees')
+        .select('gmc_inclusion_date').eq('emp_id', emp_id).single(),
     ]);
   } catch (err) {
     // Should not happen with Supabase client (it resolves errors, not rejects),
@@ -490,6 +494,14 @@ router.get('/enrollment-data', requireAuth, enrollmentLimiter, async (req, res) 
   }
 
   const enrollmentDraft = enrollRes.data?.[0] || null;
+
+  // Resolve gmc_inclusion_date: employees table > employee_onboarding > null
+  // The frontend uses this as the premium proration start date (fallback: date_of_joining).
+  const gmcInclusionDate =
+    empMainRes?.data?.gmc_inclusion_date ||
+    empRes?.data?.gmc_inclusion_date ||
+    null;
+  if (employeeData) employeeData.gmc_inclusion_date = gmcInclusionDate;
 
   res.json({
     employee: employeeData,

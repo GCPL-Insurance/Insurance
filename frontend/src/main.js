@@ -1658,6 +1658,9 @@ let enrollState = {
   // Pre-calculated total CTC GMC from vw_employee_ctc_gmc_total (server-supplied).
   // null = no view row → fall back to proration formula in ctcGmcAvailable().
   ctcGmcTotalFromView: null,
+  // gmc_inclusion_date from employees table (null → fall back to date_of_joining).
+  // This is the premium proration start date for all members.
+  gmcInclusionDate: null,
 };
 
 // ✅ FIX: Expose enrollState to window so inline onclick handlers in injected HTML
@@ -1687,9 +1690,15 @@ function completedAge(dobStr, refDateStr) {
   return age;
 }
 
-function coverageDays(dojStr) {
-  // Policy days: Date of Joining → 23 Jul 2026 (inclusive)
-  const doj = new Date(dojStr);
+function effectiveStartDate(emp) {
+  // Premium proration start date: gmc_inclusion_date if set, else date_of_joining.
+  // Uses enrollState.gmcInclusionDate (fetched from employees table) when available.
+  return enrollState.gmcInclusionDate || emp?.date_of_joining || null;
+}
+
+function coverageDays(startDateStr) {
+  // Policy days: effective start date → 23 Jul 2026 (inclusive)
+  const doj = new Date(startDateStr);
   const days = Math.floor((POLICY_END_DATE - doj) / 86400000) + 1;
   return Math.max(0, days);
 }
@@ -1721,7 +1730,7 @@ function proratedPremium(annualPremium, dojStr) {
 function calcPremiumSummary() {
   const emp = enrollState.emp;
   const si  = enrollState.selectedSI;
-  const doj = emp.date_of_joining;
+  const doj = effectiveStartDate(emp);   // gmc_inclusion_date ?? date_of_joining
   const rc  = enrollState.rateCards;
 
   // Self
@@ -1774,6 +1783,8 @@ async function renderEnrollmentForm() {
     // for this employee; null means no row → proration formula is used instead.
     enrollState.ctcGmcTotalFromView = (data.ctc_gmc_total_from_view != null)
       ? Number(data.ctc_gmc_total_from_view) : null;
+    // Use gmc_inclusion_date from employees table as premium start date if available.
+    enrollState.gmcInclusionDate = data.employee?.gmc_inclusion_date || null;
 
     // ✅ FIX #2: POPULATE EXISTING DEPENDENTS FROM API RESPONSE
     // The backend now returns existing_dependents from employee_gmc_enrollment_insured table
@@ -2243,7 +2254,7 @@ function renderLivePremiumTable() {
   if (!enrollState.selectedSI || !enrollState.emp) return '';
   const emp = enrollState.emp;
   const si  = enrollState.selectedSI;
-  const doj = emp.date_of_joining;
+  const doj = effectiveStartDate(emp);   // gmc_inclusion_date ?? date_of_joining
   const rc  = enrollState.rateCards;
 
   // Only include dependents with complete data
@@ -2395,7 +2406,7 @@ function removeDependent(idx) {
 
 function enrollStep3Next() {
   const emp = enrollState.emp;
-  const doj = emp.date_of_joining;
+  const doj = effectiveStartDate(emp);   // gmc_inclusion_date ?? date_of_joining
 
   for (let i = 0; i < enrollState.dependents.length; i++) {
     const dep = enrollState.dependents[i];
@@ -2403,10 +2414,10 @@ function enrollStep3Next() {
     if (!dep.dob) { showToast(`Please enter date of birth for ${dep.relationship}`, 'error'); return; }
     const age = completedAge(dep.dob, doj);
     if (dep.relationship === 'Spouse') {
-      if (age < 18) { showToast(`Spouse must be at least 18 years old on Date of Joining (${doj})`, 'error'); return; }
+      if (age < 18) { showToast(`Spouse must be at least 18 years old on GMC Inclusion Date (${doj})`, 'error'); return; }
     }
     if (['Son','Daughter'].includes(dep.relationship)) {
-      if (age >= 25) { showToast(`${dep.relationship} must be below 25 years on Date of Joining (${doj})`, 'error'); return; }
+      if (age >= 25) { showToast(`${dep.relationship} must be below 25 years on GMC Inclusion Date (${doj})`, 'error'); return; }
     }
     if (['Father','Mother','Father-in-Law','Mother-in-Law'].includes(dep.relationship)) {
       if (age > 90) { showToast(`${dep.relationship}'s age cannot exceed 90 years`, 'error'); return; }
@@ -2428,7 +2439,7 @@ function renderEnrollStep4() {
   <div class="section-card">
     <div class="section-title">💰 Premium Calculation</div>
     <div style="font-size:13px;color:var(--text3);margin-bottom:16px">
-      Based on <strong>Magma General Insurance INSURER rate card</strong>. Premium is pro-rated from Date of Joining (${fmtDate(emp.date_of_joining)}) to 23 Jul 2026.
+      Based on <strong>Magma General Insurance INSURER rate card</strong>. Premium is pro-rated from ${enrollState.gmcInclusionDate ? 'GMC Inclusion Date' : 'Date of Joining'} (${fmtDate(effectiveStartDate(emp))}) to 23 Jul 2026.
       CTC GMC is calculated from Date of Joining to 31 Jul 2026.
     </div>
 
@@ -2554,7 +2565,7 @@ function buildEnrollmentPayload(action) {
     designation: emp.designation,
     date_of_joining: emp.date_of_joining,
     ctc_gmc_per_month: emp.ctc_gmc_per_month,
-    gmc_inclusion_date: emp.date_of_joining,
+    gmc_inclusion_date: enrollState.gmcInclusionDate || emp.date_of_joining,
     mobile_number: enrollState.mobile,
     email_id: enrollState.email,
     selected_sum_insured: enrollState.selectedSI,
@@ -2563,7 +2574,7 @@ function buildEnrollmentPayload(action) {
   };
 
   const insured_members = [];
-  const doj = emp.date_of_joining;
+  const doj = effectiveStartDate(emp);   // gmc_inclusion_date ?? date_of_joining
   // Self
   insured_members.push({
     insured_name: emp.emp_name,
