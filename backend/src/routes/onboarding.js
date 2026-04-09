@@ -1,14 +1,9 @@
 import express from 'express';
-import { createClient } from '@supabase/supabase-js';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
+import { supabase } from '../index.js';
 
 const router = express.Router();
-
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY
-);
 
 const JWT_SECRET = process.env.JWT_SECRET;
 const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET;

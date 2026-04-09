@@ -1,4 +1,3 @@
-import 'dotenv/config';
 import express from 'express';
 import helmet from 'helmet';
 import cors from 'cors';
@@ -17,7 +16,7 @@ process.on('uncaughtException', (err) => {
 });
 
 // ─── Validate critical env vars at startup ────────────────────────────────────
-const REQUIRED_ENV = ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY', 'ALLOWED_ORIGINS'];
+const REQUIRED_ENV = ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY', 'ALLOWED_ORIGINS', 'JWT_SECRET', 'JWT_REFRESH_SECRET'];
 for (const key of REQUIRED_ENV) {
   if (!process.env[key]) {
     console.error(`❌ FATAL: Missing required environment variable: ${key}`);
