@@ -315,8 +315,104 @@ function _origInitApp() {
   navigate(state.role === 'employee' ? 'employee_dashboard' : 'dashboard');
 }
 
+// ─── INVITE / SET-PASSWORD FLOW ───────────────────────────────────────────────
+// When Supabase redirects from an invite email it appends tokens in the URL hash:
+//   https://gcpl.insurance.portal.in/#access_token=xxx&type=invite&refresh_token=yyy
+// We detect this BEFORE the normal session restore so the user sees the set-password
+// page instead of the login page.
+
+function _parseInviteHash() {
+  const hash = window.location.hash;
+  if (!hash) return null;
+  const params = new URLSearchParams(hash.startsWith('#') ? hash.slice(1) : hash);
+  const type   = params.get('type');
+  if (type !== 'invite' && type !== 'recovery') return null;
+  return {
+    access_token:  params.get('access_token'),
+    refresh_token: params.get('refresh_token'),
+    type,
+  };
+}
+
+let _inviteTokens = null; // held in memory until password is submitted
+
+function showSetPasswordPage(tokens, email = '') {
+  _inviteTokens = tokens;
+  // Clean the hash from the URL so tokens aren't visible / re-triggered on refresh
+  history.replaceState(null, '', window.location.pathname + window.location.search);
+  document.getElementById('set-password-page').style.display = 'flex';
+  document.getElementById('login-page').style.display        = 'none';
+  document.getElementById('app').style.display               = 'none';
+  if (email) document.getElementById('set-pwd-sub').textContent =
+    `Welcome! Set a password for ${email}`;
+}
+
+function showLoginPage() {
+  document.getElementById('set-password-page').style.display = 'none';
+  document.getElementById('login-page').style.display        = 'flex';
+}
+
+async function doSetPassword() {
+  const pwd    = document.getElementById('set-pwd-input').value;
+  const pwd2   = document.getElementById('set-pwd-confirm').value;
+  const errEl  = document.getElementById('set-pwd-error');
+  const btn    = document.getElementById('set-pwd-btn');
+
+  errEl.style.display = 'none';
+
+  if (!pwd)              { errEl.textContent = 'Please enter a password.';                         errEl.style.display = 'block'; return; }
+  if (pwd.length < 8)    { errEl.textContent = 'Password must be at least 8 characters.';          errEl.style.display = 'block'; return; }
+  if (!/\d/.test(pwd))   { errEl.textContent = 'Password must contain at least one number.';       errEl.style.display = 'block'; return; }
+  if (pwd !== pwd2)      { errEl.textContent = 'Passwords do not match.';                          errEl.style.display = 'block'; return; }
+  if (!_inviteTokens)    { errEl.textContent = 'Invite session lost. Please use the invite link again.'; errEl.style.display = 'block'; return; }
+
+  btn.disabled     = true;
+  btn.textContent  = 'Activating…';
+
+  try {
+    const user = await auth.setPassword(
+      _inviteTokens.access_token,
+      _inviteTokens.refresh_token,
+      pwd
+    );
+    _inviteTokens = null;
+    // Log user straight in
+    state.user     = user;
+    state.role     = user.role;
+    state.empId    = user.emp_id  || '';
+    state.userName = user.full_name || user.email;
+    document.getElementById('set-password-page').style.display = 'none';
+    initApp();
+  } catch (e) {
+    errEl.textContent = e.message || 'Failed to set password. Please try again.';
+    errEl.style.display = 'block';
+    btn.disabled    = false;
+    btn.textContent = 'Activate Account →';
+  }
+}
+
+window.doSetPassword = doSetPassword;
+window.showLoginPage  = showLoginPage;
+
 // Restore session on page load
 (async () => {
+  // ── Check for invite / password-reset link first ──
+  const inviteData = _parseInviteHash();
+  if (inviteData?.access_token) {
+    // Peek at the token to show the user's email in the heading
+    let email = '';
+    try {
+      const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/auth/v1/user`, {
+        headers: { Authorization: `Bearer ${inviteData.access_token}`, apikey: import.meta.env.VITE_SUPABASE_ANON_KEY }
+      });
+      const u = await res.json();
+      email = u?.email || '';
+    } catch { /* silently ignore — email hint is cosmetic */ }
+    showSetPasswordPage(inviteData, email);
+    return; // stop — don't attempt normal session restore
+  }
+
+  // ── Normal session restore ──
   if (auth.isLoggedIn()) {
     try {
       // Validate token with server

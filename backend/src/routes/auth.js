@@ -342,6 +342,67 @@ router.post('/verify-emp', async (req, res) => {
 
 // ─── POST /api/auth/login ─────────────────────────────────────────────────────
 // Public: Authenticate and return JWT tokens.
+// ─── POST /api/auth/set-password ─────────────────────────────────────────────
+// Used by employees who received an invite email. They land on the app with
+// an access_token + refresh_token in the URL hash (type=invite). The frontend
+// extracts those tokens and posts them here with the chosen password.
+router.post('/set-password', async (req, res) => {
+  const { access_token, refresh_token, new_password } = req.body;
+
+  if (!access_token || !refresh_token)
+    return res.status(400).json({ error: 'Invalid invite link. Please request a new invite.' });
+
+  const pwdErr = validatePassword(new_password);
+  if (pwdErr) return res.status(400).json({ error: pwdErr });
+
+  // 1. Verify the invite token and get user identity
+  const { data: { user }, error: userErr } = await supabase.auth.getUser(access_token);
+  if (userErr || !user)
+    return res.status(401).json({ error: 'Invite link has expired or is invalid. Please contact admin.' });
+
+  // 2. Set the password via admin API
+  const { error: updateErr } = await supabase.auth.admin.updateUserById(user.id, {
+    password: new_password,
+  });
+  if (updateErr) {
+    console.error('[set-password] updateUserById failed:', updateErr.message);
+    return res.status(500).json({ error: 'Failed to set password. Please try again.' });
+  }
+
+  // 3. Sign in with the new password to return a fresh session
+  const { data: signInData, error: signInErr } = await supabase.auth.signInWithPassword({
+    email: user.email,
+    password: new_password,
+  });
+  if (signInErr) {
+    console.error('[set-password] signIn after password set failed:', signInErr.message);
+    return res.status(500).json({ error: 'Password set, but auto-login failed. Please log in manually.' });
+  }
+
+  // 4. Fetch user profile
+  const { data: profile, error: profileErr } = await supabase
+    .from('user_profiles').select('role, emp_id, full_name, is_active').eq('id', user.id).single();
+
+  if (profileErr || !profile)
+    return res.status(200).json({
+      access_token:  signInData.session.access_token,
+      refresh_token: signInData.session.refresh_token,
+      expires_at:    signInData.session.expires_at,
+      user: { id: user.id, email: user.email, role: 'employee', emp_id: null, full_name: user.email },
+    });
+
+  res.json({
+    access_token:  signInData.session.access_token,
+    refresh_token: signInData.session.refresh_token,
+    expires_at:    signInData.session.expires_at,
+    user: {
+      id: user.id, email: user.email,
+      role: profile.role || 'employee', emp_id: profile.emp_id, full_name: profile.full_name,
+    },
+  });
+});
+
+// ─── POST /api/auth/login ─────────────────────────────────────────────────────
 router.post('/login', authLimiter, async (req, res) => {
   const { email, password, captchaToken } = req.body;
   if (!email || !password) return res.status(400).json({ error: 'Email and password required' });

@@ -14,6 +14,34 @@
 <body>
 
 <!-- LOGIN / SIGNUP PAGE -->
+<!-- SET PASSWORD PAGE — shown when employee arrives via invite email link -->
+<div id="set-password-page" style="display:none;min-height:100vh;align-items:center;justify-content:center;background:linear-gradient(135deg,#f0f4ff 0%,#e8f0fe 100%)">
+  <div class="login-card">
+    <div class="login-logo">
+      <div class="login-logo-icon">🛡️</div>
+      <div>
+        <div class="login-logo-text">InsurePortal</div>
+        <div class="login-logo-sub">GCPL Insurance Portal · insurance-portal.in</div>
+      </div>
+    </div>
+    <div class="login-title">Set Your Password</div>
+    <div class="login-sub" id="set-pwd-sub">Create a password to activate your account</div>
+    <div class="form-group">
+      <label class="form-label">New Password <span style="color:#dc2626">*</span></label>
+      <input type="password" id="set-pwd-input" class="form-input" placeholder="Min 8 characters, include a number" onkeydown="if(event.key==='Enter')doSetPassword()">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Confirm Password <span style="color:#dc2626">*</span></label>
+      <input type="password" id="set-pwd-confirm" class="form-input" placeholder="Re-enter your password" onkeydown="if(event.key==='Enter')doSetPassword()">
+    </div>
+    <div id="set-pwd-error" style="display:none;background:#fee2e2;border:1px solid #fca5a5;border-radius:8px;padding:10px 14px;font-size:13px;color:#991b1b;margin-bottom:12px"></div>
+    <button class="btn-login" id="set-pwd-btn" onclick="doSetPassword()">Activate Account →</button>
+    <div style="margin-top:14px;font-size:12px;color:#64748b;text-align:center">
+      Already have a password? <a href="#" onclick="showLoginPage()" style="color:#1d4ed8;text-decoration:none;font-weight:600">Sign In</a>
+    </div>
+  </div>
+</div>
+
 <div id="login-page">
   <div class="login-bg"></div>
   <div class="login-card">

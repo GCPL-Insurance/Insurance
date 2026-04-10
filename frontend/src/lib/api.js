@@ -155,6 +155,17 @@ export const auth = {
     }
     return null;
   },
+  // Called from the invite set-password page — tokens come from URL hash
+  setPassword: async (access_token, refresh_token, new_password) => {
+    const data = await apiFetch('/auth/set-password', {
+      method: 'POST',
+      body: JSON.stringify({ access_token, refresh_token, new_password }),
+    });
+    tokenStore.set(data.access_token);
+    tokenStore.setRefresh(data.refresh_token);
+    tokenStore.setUser(data.user);
+    return data.user;
+  },
 };
 
 // ─── Tables ───────────────────────────────────────────────────────────────────
