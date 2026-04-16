@@ -59,6 +59,7 @@ function authMiddleware(req, res, next) {
 }
 
 // ─── POST /api/onboarding/verify-emp ─────────────────────────────────────────
+// Priority: employees table (canonical) → employee_onboarding (fallback for new/onboarding employees)
 
 router.post('/verify-emp', async (req, res) => {
   try {
@@ -67,7 +68,29 @@ router.post('/verify-emp', async (req, res) => {
 
     const empIdUpper = emp_id.trim().toUpperCase();
 
-    // Check employee_onboarding first
+    // ── 1. Check employees table FIRST (canonical HR master) ─────────────────
+    const { data: employeeData } = await supabase
+      .from('employees')
+      .select('emp_id, emp_name, gender, date_of_birth, date_of_joining, department, designation, ctc_gmc_per_month, unit, gmc_inclusion_date')
+      .eq('emp_id', empIdUpper)
+      .single();
+
+    if (employeeData) {
+      const { data: profileData } = await supabase
+        .from('user_profiles')
+        .select('emp_id, role')
+        .eq('emp_id', empIdUpper)
+        .single();
+
+      return res.json({
+        found: true,
+        source: 'employees',
+        already_registered: !!profileData,
+        ...employeeData,
+      });
+    }
+
+    // ── 2. Fall back to employee_onboarding (new / not-yet-in-HR-system employees) ──
     const { data: onboardingData } = await supabase
       .from('employee_onboarding')
       .select('emp_id, emp_name, gender, date_of_birth, date_of_joining, department, designation, ctc_gmc_per_month, onboarding_status, unit')
@@ -86,28 +109,6 @@ router.post('/verify-emp', async (req, res) => {
         source: 'onboarding',
         already_registered: !!profileData,
         ...onboardingData,
-      });
-    }
-
-    // Fall back to employees table
-    const { data: employeeData } = await supabase
-      .from('employees')
-      .select('emp_id, emp_name, gender, date_of_birth, date_of_joining, department, designation, ctc_gmc_per_month, unit')
-      .eq('emp_id', empIdUpper)
-      .single();
-
-    if (employeeData) {
-      const { data: profileData } = await supabase
-        .from('user_profiles')
-        .select('emp_id, role')
-        .eq('emp_id', empIdUpper)
-        .single();
-
-      return res.json({
-        found: true,
-        source: 'employees',
-        already_registered: !!profileData,
-        ...employeeData,
       });
     }
 
@@ -344,43 +345,102 @@ router.post('/logout', authMiddleware, async (req, res) => {
 });
 
 // ─── GET /api/onboarding/enrollment-data ─────────────────────────────────────
+// Priority: employees table (canonical) → employee_onboarding (fallback).
+// CTC GMC total: vw_employee_ctc_gmc_total (view, most accurate) → JS proration on frontend.
 
 router.get('/enrollment-data', authMiddleware, async (req, res) => {
   try {
     const emp_id = req.user.emp_id;
 
-    const { data: onboardingData } = await supabase
-      .from('employee_onboarding')
-      .select('*')
-      .eq('emp_id', emp_id)
-      .single();
+    // ── Fetch all sources in parallel ────────────────────────────────────────
+    const [empMainRes, onboardingRes, enrollmentRes, rateRes, ctcTotalRes, depsRes] =
+      await Promise.all([
+        // 1. employees — canonical HR master (preferred source)
+        supabase
+          .from('employees')
+          .select('emp_id, emp_name, gender, date_of_birth, date_of_joining, department, designation, ctc_gmc_per_month, unit, gmc_inclusion_date, gmc_effective_date, is_active, status')
+          .eq('emp_id', emp_id)
+          .single(),
+        // 2. employee_onboarding — fallback / supplementary fields (mobile, email)
+        supabase
+          .from('employee_onboarding')
+          .select('emp_id, emp_name, gender, date_of_birth, date_of_joining, department, designation, ctc_gmc_per_month, onboarding_status, unit, mobile_number, email_id, gmc_inclusion_date')
+          .eq('emp_id', emp_id)
+          .single(),
+        // 3. existing enrollment draft
+        supabase
+          .from('employee_gmc_enrollment')
+          .select('*')
+          .eq('emp_id', emp_id)
+          .order('created_at', { ascending: false })
+          .limit(1),
+        // 4. insurer rate cards for premium calculation
+        supabase
+          .from('gmc_rate_cards')
+          .select('rate_card_id, rate_card_type, age_band_from, age_band_to, sum_insured, annual_premium')
+          .eq('rate_card_type', 'INSURER')
+          .order('sum_insured')
+          .order('age_band_from'),
+        // 5. pre-calculated CTC GMC total from view (employees-based, most accurate)
+        supabase
+          .from('vw_employee_ctc_gmc_total')
+          .select('total_ctc_gmc')
+          .eq('emp_id', emp_id)
+          .single(),
+        // 6. saved insured members from previous enrollment
+        supabase
+          .from('employee_gmc_enrollment_insured')
+          .select('*')
+          .eq('emp_id', emp_id),
+      ]);
 
-    if (onboardingData) {
-      const { data: enrollmentData } = await supabase
-        .from('employee_gmc_enrollment')
-        .select('*')
-        .eq('emp_id', emp_id)
-        .single();
+    const mainEmp   = empMainRes?.data;    // from public.employees
+    const onboarding = onboardingRes?.data; // from public.employee_onboarding
 
-      return res.json({ employee: onboardingData, enrollment: enrollmentData || null, profile: null });
+    if (!mainEmp && !onboarding) {
+      return res.status(404).json({ error: 'Employee data not found' });
     }
 
-    const { data: employeeData } = await supabase
-      .from('employees')
-      .select('emp_id, emp_name, gender, date_of_birth, date_of_joining, department, designation, ctc_gmc_per_month, unit')
-      .eq('emp_id', emp_id)
-      .single();
+    // ── Merge: employees wins for all HR fields; onboarding adds contact fields ──
+    // pick() returns the first non-null/non-undefined value across sources.
+    const pick = (...vals) => vals.find(v => v !== null && v !== undefined) ?? null;
 
-    if (!employeeData)
-      return res.status(404).json({ error: 'Employee data not found' });
+    const employeeData = {
+      emp_id:             pick(mainEmp?.emp_id,             onboarding?.emp_id),
+      emp_name:           pick(mainEmp?.emp_name,           onboarding?.emp_name),
+      gender:             pick(mainEmp?.gender,             onboarding?.gender),
+      date_of_birth:      pick(mainEmp?.date_of_birth,      onboarding?.date_of_birth),
+      date_of_joining:    pick(mainEmp?.date_of_joining,    onboarding?.date_of_joining),
+      department:         pick(mainEmp?.department,         onboarding?.department),
+      designation:        pick(mainEmp?.designation,        onboarding?.designation),
+      // ctc_gmc_per_month: employees table is the authoritative salary field
+      ctc_gmc_per_month:  pick(mainEmp?.ctc_gmc_per_month,  onboarding?.ctc_gmc_per_month),
+      unit:               pick(mainEmp?.unit,               onboarding?.unit),
+      gmc_inclusion_date: pick(mainEmp?.gmc_inclusion_date, onboarding?.gmc_inclusion_date),
+      gmc_effective_date: mainEmp?.gmc_effective_date ?? null,
+      // contact fields only exist in onboarding
+      mobile_number:      onboarding?.mobile_number ?? null,
+      email_id:           onboarding?.email_id ?? null,
+      onboarding_status:  onboarding?.onboarding_status ?? 'pending',
+      _source:            mainEmp ? (onboarding ? 'merged' : 'employees_only') : 'onboarding_only',
+    };
 
-    const { data: enrollmentData } = await supabase
-      .from('employee_gmc_enrollment')
-      .select('*')
-      .eq('emp_id', emp_id)
-      .single();
+    const enrollmentDraft    = enrollmentRes?.data?.[0] || null;
+    const existingDependents = depsRes?.data || [];
 
-    return res.json({ employee: employeeData, enrollment: enrollmentData || null, profile: null });
+    return res.json({
+      employee:   employeeData,
+      enrollment: enrollmentDraft,
+      rate_cards: rateRes?.data || [],
+      profile: {
+        mobile_number: onboarding?.mobile_number || enrollmentDraft?.mobile_number || null,
+        email:         onboarding?.email_id      || enrollmentDraft?.email_id      || null,
+      },
+      existing_dependents: existingDependents,
+      // Pre-calculated total CTC GMC from vw_employee_ctc_gmc_total.
+      // null = no view row → frontend falls back to JS proration using ctc_gmc_per_month.
+      ctc_gmc_total_from_view: ctcTotalRes?.data?.total_ctc_gmc ?? null,
+    });
   } catch (err) {
     console.error('enrollment-data error:', err);
     res.status(500).json({ error: 'Server error' });

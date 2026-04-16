@@ -107,6 +107,7 @@ function friendlyAuthError(authErr, context = '') {
 
 // ─── POST /api/auth/gmc-verify-emp ───────────────────────────────────────────
 // Public: check if an emp_id already has an account before showing GMC signup form.
+// Priority: employees table (canonical HR master) → employee_onboarding (fallback).
 router.post('/gmc-verify-emp', async (req, res) => {
   const { emp_id } = req.body;
   if (!emp_id || typeof emp_id !== 'string') return res.status(400).json({ error: 'emp_id required' });
@@ -122,33 +123,38 @@ router.post('/gmc-verify-emp', async (req, res) => {
     .from('employee_gmc_enrollment').select('enrollment_id, enrollment_status')
     .eq('emp_id', empIdNorm).order('created_at', { ascending: false }).limit(1).single();
 
+  // ── 1. employees table — canonical, most complete ─────────────────────────
   const { data: empRecord } = await supabase
-    .from('employee_onboarding')
-    .select('emp_id, emp_name, department, designation, date_of_joining, gender, date_of_birth, onboarding_status')
+    .from('employees')
+    .select('emp_id, emp_name, department, designation, date_of_joining, gender, date_of_birth, is_active, unit, ctc_gmc_per_month, gmc_inclusion_date')
     .eq('emp_id', empIdNorm).single();
 
-  let empFallback = null;
+  // ── 2. employee_onboarding — fallback for new / not-yet-in-HR-system employees ──
+  let onboardingFallback = null;
   if (!empRecord) {
     const { data } = await supabase
-      .from('employees')
-      .select('emp_id, emp_name, department, designation, date_of_joining, gender, date_of_birth, is_active')
+      .from('employee_onboarding')
+      .select('emp_id, emp_name, department, designation, date_of_joining, gender, date_of_birth, onboarding_status, unit, ctc_gmc_per_month')
       .eq('emp_id', empIdNorm).single();
-    empFallback = data;
+    onboardingFallback = data;
   }
 
-  const source = empRecord || empFallback;
+  const source = empRecord || onboardingFallback;
 
   res.json({
     verified: true,
     emp_id: empIdNorm,
-    from_onboarding_table: !!empRecord,
-    from_employees_table: !!empFallback,
+    from_employees_table: !!empRecord,
+    from_onboarding_table: !!onboardingFallback,
     emp_name: source?.emp_name || null,
     department: source?.department || null,
     designation: source?.designation || null,
     date_of_joining: source?.date_of_joining || null,
     gender: source?.gender || null,
     date_of_birth: source?.date_of_birth || null,
+    unit: source?.unit || null,
+    ctc_gmc_per_month: source?.ctc_gmc_per_month || null,
+    gmc_inclusion_date: empRecord?.gmc_inclusion_date || null,
     existing_enrollment: existingEnroll
       ? { id: existingEnroll.enrollment_id, status: existingEnroll.enrollment_status }
       : null,
@@ -855,7 +861,9 @@ router.post('/simple-signup', authLimiter, async (req, res) => {
 });
 
 // ─── PATCH /api/auth/update-ctc ──────────────────────────────────────────────
-// Protected: Employee updates their own ctc_gmc_per_month in employee_onboarding.
+// Protected: Employee updates their own ctc_gmc_per_month.
+// Writes to BOTH tables so the value is consistent regardless of which source
+// the enrollment-data endpoint picks up (employees takes priority).
 router.patch('/update-ctc', requireAuth, async (req, res) => {
   const { emp_id } = req.user;
   if (!emp_id) return res.status(400).json({ error: 'No emp_id on account.' });
@@ -867,13 +875,21 @@ router.patch('/update-ctc', requireAuth, async (req, res) => {
   const ctcVal = Number(ctc_gmc_per_month);
   if (ctcVal < 0) return res.status(400).json({ error: 'CTC GMC cannot be negative.' });
 
-  const { error } = await supabase
-    .from('employee_onboarding').update({ ctc_gmc_per_month: ctcVal }).eq('emp_id', emp_id);
+  // Update both tables in parallel — ignore "no rows matched" (employee may only exist in one)
+  const [empRes, obRes] = await Promise.all([
+    supabase.from('employees').update({ ctc_gmc_per_month: ctcVal }).eq('emp_id', emp_id),
+    supabase.from('employee_onboarding').update({ ctc_gmc_per_month: ctcVal }).eq('emp_id', emp_id),
+  ]);
 
-  if (error) {
-    console.error('[update-ctc] failed for', emp_id, ':', error.message);
-    return res.status(400).json({ error: error.message });
+  // Only fail hard if BOTH writes errored (genuine DB error, not "row not found")
+  const empErr = empRes.error;
+  const obErr  = obRes.error;
+  if (empErr && obErr) {
+    console.error('[update-ctc] both writes failed for', emp_id, ':', empErr.message, obErr.message);
+    return res.status(400).json({ error: empErr.message || obErr.message });
   }
+  if (empErr)  console.warn('[update-ctc] employees write failed for', emp_id, ':', empErr.message);
+  if (obErr)   console.warn('[update-ctc] employee_onboarding write failed for', emp_id, ':', obErr.message);
 
   console.log('[update-ctc] emp_id', emp_id, 'set ctc_gmc_per_month =', ctcVal);
   res.json({ success: true, ctc_gmc_per_month: ctcVal });
