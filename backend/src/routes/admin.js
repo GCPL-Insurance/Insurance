@@ -196,19 +196,46 @@ router.get('/enrollments', async (req, res) => {
   const { data, error } = await query;
   if (error) return res.status(400).json({ error: error.message });
 
-  // Attach summaries
+  // Attach summaries + live CTC GMC totals from view
   const enrollmentIds = (data || []).map(e => e.enrollment_id).filter(Boolean);
-  const { data: summaries } = enrollmentIds.length
-    ? await supabase.from('employee_gmc_enrollment_summary')
-        .select('enrollment_id,total_insurer_premium,total_ctc_gmc_available,salary_deduction,gmc_refund')
-        .in('enrollment_id', enrollmentIds)
-    : { data: [] };
+  const empIds        = (data || []).map(e => e.emp_id).filter(Boolean);
 
-  const summaryMap = {};
-  (summaries || []).forEach(s => { summaryMap[s.enrollment_id] = s; });
+  const [{ data: summaries }, { data: liveTotals }] = await Promise.all([
+    enrollmentIds.length
+      ? supabase.from('employee_gmc_enrollment_summary')
+          .select('enrollment_id,total_insurer_premium,total_ctc_gmc_available,salary_deduction,gmc_refund')
+          .in('enrollment_id', enrollmentIds)
+      : { data: [] },
+    empIds.length
+      ? supabase.from('vw_employee_ctc_gmc_total')
+          .select('emp_id,total_ctc_gmc')
+          .in('emp_id', empIds)
+      : { data: [] },
+  ]);
+
+  const summaryMap   = {};
+  (summaries  || []).forEach(s => { summaryMap[s.enrollment_id] = s; });
+  const liveTotalMap = {};
+  (liveTotals || []).forEach(r => { liveTotalMap[r.emp_id] = Number(r.total_ctc_gmc); });
 
   res.json({
-    data: (data || []).map(e => ({ ...e, summary: summaryMap[e.enrollment_id] || null })),
+    data: (data || []).map(e => {
+      const saved   = summaryMap[e.enrollment_id] || null;
+      const liveCtc = liveTotalMap[e.emp_id] ?? null;
+      if (!saved) return { ...e, summary: null };
+      // Recalculate deduction/refund using live ctc when available
+      const ctc      = liveCtc ?? Number(saved.total_ctc_gmc_available || 0);
+      const premium  = Number(saved.total_insurer_premium || 0);
+      return {
+        ...e,
+        summary: {
+          ...saved,
+          total_ctc_gmc_available: liveCtc ?? saved.total_ctc_gmc_available,
+          salary_deduction: Math.max(0, premium - ctc),
+          gmc_refund:       Math.max(0, ctc - premium),
+        },
+      };
+    }),
   });
 });
 
@@ -226,11 +253,47 @@ router.get('/enrollments/:id', async (req, res) => {
 
   if (!enrollRes.data) return res.status(404).json({ error: 'Enrollment not found' });
 
+  const empId = enrollRes.data.emp_id;
+
+  // ── Always fetch live CTC GMC total from view — this is the authoritative value.
+  // The saved summary.total_ctc_gmc_available may be stale (calculated at submission
+  // time using DOJ fallback before gmc_effective_date was populated).
+  const { data: ctcTotalRow } = await supabase
+    .from('vw_employee_ctc_gmc_total')
+    .select('total_ctc_gmc')
+    .eq('emp_id', empId)
+    .single();
+  const liveTotalCtcGmc = ctcTotalRow?.total_ctc_gmc ?? null;
+
+  // ── Merge: override saved summary's ctc field with live view value.
+  // If the live view has a value, it always wins over the stale saved summary.
+  const savedSummary = summaryRes.data || null;
+  const mergedSummary = savedSummary ? {
+    ...savedSummary,
+    // Override stale ctc with live view value
+    total_ctc_gmc_available: liveTotalCtcGmc ?? savedSummary.total_ctc_gmc_available,
+    // Recalculate deduction/refund against live ctc
+    ...(liveTotalCtcGmc != null ? (() => {
+      const premium  = Number(savedSummary.total_insurer_premium || 0);
+      const ctc      = Number(liveTotalCtcGmc);
+      return {
+        salary_deduction: Math.max(0, premium - ctc),
+        gmc_refund:       Math.max(0, ctc - premium),
+      };
+    })() : {}),
+    _ctc_source: liveTotalCtcGmc != null ? 'live_view' : 'saved_summary',
+  } : (liveTotalCtcGmc != null ? {
+    // No saved summary at all but view has a value — build minimal summary
+    total_ctc_gmc_available: liveTotalCtcGmc,
+    _ctc_source: 'live_view',
+  } : null);
+
   res.json({
     enrollment: enrollRes.data,
     insured_members: membersRes.data || [],
-    summary: summaryRes.data || null,
+    summary: mergedSummary,
     audit: auditRes.data || [],
+    live_ctc_gmc_total: liveTotalCtcGmc,  // exposed separately for transparency
   });
 });
 

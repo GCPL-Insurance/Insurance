@@ -1787,8 +1787,8 @@ function completedAge(dobStr, refDateStr) {
 }
 
 function effectiveStartDate(emp) {
-  // Premium proration start date: gmc_inclusion_date if set, else date_of_joining.
-  // Uses enrollState.gmcInclusionDate (fetched from employees table) when available.
+  // Premium proration start date for INSURED COVERAGE: gmc_inclusion_date if set, else date_of_joining.
+  // This is used for calculating how many days the INSURANCE PREMIUM covers.
   return enrollState.gmcInclusionDate || emp?.date_of_joining || null;
 }
 
@@ -1799,13 +1799,17 @@ function coverageDays(startDateStr) {
   return Math.max(0, days);
 }
 
-function ctcGmcAvailable(ctcGmcPerMonth, dojStr, unit) {
-  // CTC GMC: prorated from Date of Joining to FY end (unit-aware)
-  // UNIT -3: 30 Jun 2026 | Others: 31 Jul 2026
-  const endDate = getCTCGmcEndDate(unit);
-  const doj = new Date(dojStr);
-  const days = Math.floor((endDate - doj) / 86400000) + 1;
-  const annual = ctcGmcPerMonth * 12;
+function ctcGmcAvailable(ctcGmcPerMonth, unit, emp) {
+  // CTC GMC JS fallback — only runs when vw_employee_ctc_gmc_total returns no row.
+  // Start date MUST be gmc_effective_date (when employer GMC contribution started).
+  // Using gmc_inclusion_date or date_of_joining here is WRONG — those pre-date GMC.
+  // If gmc_effective_date is null the employee is not on GMC → return 0.
+  const gmcStart = emp?.gmc_effective_date || null;
+  if (!gmcStart || !ctcGmcPerMonth || ctcGmcPerMonth <= 0) return 0;
+  const endDate   = getCTCGmcEndDate(unit);
+  const startDate = new Date(gmcStart);
+  const days      = Math.floor((endDate - startDate) / 86400000) + 1;
+  const annual    = ctcGmcPerMonth * 12;
   return Math.max(0, Math.round(annual / 365 * days));
 }
 
@@ -1858,7 +1862,7 @@ function calcPremiumSummary() {
   // Use view total when available; fall back to proration formula otherwise.
   const totalCtc     = (enrollState.ctcGmcTotalFromView != null)
     ? enrollState.ctcGmcTotalFromView
-    : ctcGmcAvailable(Number(emp.ctc_gmc_per_month), doj, emp.unit);
+    : ctcGmcAvailable(Number(emp.ctc_gmc_per_month), emp.unit, emp);
   const deduction    = Math.max(0, totalPremium - totalCtc);
   const refund       = Math.max(0, totalCtc - totalPremium);
 
@@ -2369,10 +2373,11 @@ function renderLivePremiumTable() {
   });
 
   const totalPremium = rows.reduce((s, r) => s + r.prorated, 0);
-  // Use view total when available; fall back to proration formula otherwise.
+  // Use view total when available; fall back to JS fallback otherwise.
+  // Fallback uses gmc_effective_date (via emp object) — NOT doj or gmc_inclusion_date.
   const totalCtc = (enrollState.ctcGmcTotalFromView != null)
     ? enrollState.ctcGmcTotalFromView
-    : ctcGmcAvailable(emp.ctc_gmc_per_month || 0, doj, emp.unit);
+    : ctcGmcAvailable(emp.ctc_gmc_per_month || 0, emp.unit, emp);
   const deduction = Math.max(0, totalPremium - totalCtc);
   const refund    = Math.max(0, totalCtc - totalPremium);
 
@@ -3003,7 +3008,7 @@ async function openAdminEnrollModal(id) {
         <div>Status: ${statusBadge(enroll.enrollment_status)}</div>
         ${summary ? `
         <div>Total Premium: <strong>${enrollFmt(Number(summary.total_insurer_premium))}</strong></div>
-        <div>CTC GMC Available: <strong>${enrollFmt(Number(summary.total_ctc_gmc_available))}</strong></div>
+        <div>CTC GMC Available: <strong>${enrollFmt(Number(summary.total_ctc_gmc_available))}</strong>${summary._ctc_source === 'live_view' ? ' <span style="font-size:10px;background:#d1fae5;color:#065f46;padding:1px 6px;border-radius:4px">live view ✓</span>' : ' <span style="font-size:10px;background:#fef3c7;color:#92400e;padding:1px 6px;border-radius:4px">⚠ saved at submission — may be stale</span>'}</div>
         <div>Salary Deduction: <strong style="color:${Number(summary.salary_deduction)>0?'var(--danger)':'var(--hr)'}">${Number(summary.salary_deduction)>0 ? enrollFmt(Number(summary.salary_deduction)) : 'Nil'}</strong></div>
         <div>GMC Refund: <strong style="color:var(--hr)">${Number(summary.gmc_refund)>0 ? enrollFmt(Number(summary.gmc_refund)) : 'Nil'}</strong></div>` : ''}
       </div>
