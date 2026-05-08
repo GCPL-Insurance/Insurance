@@ -265,13 +265,20 @@ async function doLogin() {
 
   try {
     // 🔒 Single unified login — role is auto-detected from user_profiles in DB.
-    // No role tab required. Admin, HR, and Employee all use the same form.
     const user = await auth.login(email, pwd, captchaToken);
 
     state.user     = user;
     state.role     = user.role || 'employee';
     state.empId    = user.emp_id  || '';
     state.userName = user.full_name || email;
+
+    // First-login: must change default DOB password before accessing portal
+    if (user.must_change_password) {
+      btn.disabled = false; btn.textContent = 'Sign In';
+      showForceChangePanel();
+      return;
+    }
+
     initApp();
   } catch(e) {
     err.textContent = e.message || 'Login failed. Please check your email and password.';
@@ -1800,17 +1807,11 @@ function coverageDays(startDateStr) {
 }
 
 function ctcGmcAvailable(ctcGmcPerMonth, unit, emp) {
-  // CTC GMC JS fallback — only runs when vw_employee_ctc_gmc_total returns no row.
-  // Start date MUST be gmc_effective_date (when employer GMC contribution started).
-  // Using gmc_inclusion_date or date_of_joining here is WRONG — those pre-date GMC.
-  // If gmc_effective_date is null the employee is not on GMC → return 0.
-  const gmcStart = emp?.gmc_effective_date || null;
-  if (!gmcStart || !ctcGmcPerMonth || ctcGmcPerMonth <= 0) return 0;
-  const endDate   = getCTCGmcEndDate(unit);
-  const startDate = new Date(gmcStart);
-  const days      = Math.floor((endDate - startDate) / 86400000) + 1;
-  const annual    = ctcGmcPerMonth * 12;
-  return Math.max(0, Math.round(annual / 365 * days));
+  // CTC GMC total must come exclusively from vw_employee_ctc_gmc_total.
+  // This fallback function is intentionally a no-op — if the view returns null,
+  // the employee is not yet on GMC or the view hasn't been populated.
+  // Never calculate from DOJ or any other date — return 0 to show Nil deduction.
+  return 0;
 }
 
 function getInsurerPremium(rateCards, si, age) {
@@ -3117,105 +3118,162 @@ window.openAdminEnrollModal  = openAdminEnrollModal;
 window.doAdminEnrollAction   = doAdminEnrollAction;
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// ─── SIGNUP (Employee Self-Registration) ──────────────────────────────────────
-// ═══════════════════════════════════════════════════════════════════════════════
+// ─── LOGIN PAGE NAVIGATION ────────────────────────────────────────────────────
 
-function showAuthTab(tab) {
-  const isLogin = tab === 'login';
-  document.getElementById('login-panel').style.display = isLogin ? '' : 'none';
-  document.getElementById('signup-panel').style.display = isLogin ? 'none' : '';
-  document.getElementById('tab-login').style.cssText = isLogin
-    ? 'flex:1;padding:9px;border-radius:10px;border:none;background:white;color:#1d4ed8;font-weight:700;font-size:13px;cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,.08);font-family:inherit'
-    : 'flex:1;padding:9px;border-radius:10px;border:none;background:transparent;color:#64748b;font-weight:600;font-size:13px;cursor:pointer;font-family:inherit';
-  document.getElementById('tab-signup').style.cssText = isLogin
-    ? 'flex:1;padding:9px;border-radius:10px;border:none;background:transparent;color:#64748b;font-weight:600;font-size:13px;cursor:pointer;font-family:inherit'
-    : 'flex:1;padding:9px;border-radius:10px;border:none;background:white;color:#1d4ed8;font-weight:700;font-size:13px;cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,.08);font-family:inherit';
+function showLoginPanel() {
+  document.getElementById('login-panel').style.display = '';
+  document.getElementById('forgot-panel').style.display = 'none';
+  document.getElementById('force-change-panel').style.display = 'none';
 }
 
-// Simple single-step signup — no emp_id verification, direct onboarding insert
-async function doSignup() {
-  const empId  = document.getElementById('su-empid')?.value?.trim().toUpperCase();
-  const name   = document.getElementById('su-name')?.value?.trim();
-  const email  = document.getElementById('su-email')?.value?.trim();
-  const pwd    = document.getElementById('su-pwd')?.value;
-  const pwd2   = document.getElementById('su-pwd2')?.value;
-  const dob    = document.getElementById('su-dob')?.value;
-  const doj    = document.getElementById('su-doj')?.value;
-  const gender = document.getElementById('su-gender')?.value;
-  const dept   = document.getElementById('su-dept')?.value?.trim();
-  const desig  = document.getElementById('su-desig')?.value?.trim();
-  const mobile  = document.getElementById('su-mobile')?.value?.trim();
-  const ctcGmc  = document.getElementById('su-ctc-gmc')?.value?.trim();
-  const unit    = document.getElementById('su-unit')?.value?.trim();
+function showForgotPanel() {
+  document.getElementById('login-panel').style.display = 'none';
+  document.getElementById('forgot-panel').style.display = '';
+  document.getElementById('force-change-panel').style.display = 'none';
+  document.getElementById('forgot-error').style.display = 'none';
+  document.getElementById('forgot-success').style.display = 'none';
+  const emailEl = document.getElementById('login-email');
+  if (emailEl?.value) document.getElementById('forgot-email').value = emailEl.value;
+}
 
-  const errEl  = document.getElementById('su-error');
-  const btn    = document.getElementById('su-register-btn');
+function showForceChangePanel() {
+  document.getElementById('login-panel').style.display = 'none';
+  document.getElementById('forgot-panel').style.display = 'none';
+  document.getElementById('force-change-panel').style.display = '';
+}
 
-  const showErr = (msg) => {
-    errEl.textContent = msg;
-    errEl.style.cssText = 'display:block;background:#fee2e2;border:1px solid #fca5a5;border-radius:8px;padding:10px 14px;font-size:13px;color:#991b1b;margin-top:10px';
-    btn.disabled = false; btn.textContent = 'Create Account →';
-    resetTurnstile('signup');
-  };
+// ─── FORGOT PASSWORD ──────────────────────────────────────────────────────────
+async function doForgotPassword() {
+  const email = document.getElementById('forgot-email')?.value?.trim();
+  const errEl  = document.getElementById('forgot-error');
+  const succEl = document.getElementById('forgot-success');
+  const btn    = document.getElementById('forgot-btn');
 
-  // Validate required fields
-  if (!empId)  return showErr('Employee ID is required');
-  if (!name)   return showErr('Full name is required');
-  if (!dob)    return showErr('Date of birth is required');
-  if (!doj)    return showErr('Date of joining is required');
-  if (!unit)   return showErr('Unit is required');
-  if (!email)  return showErr('Email address is required');
-  if (!pwd || pwd.length < 8) return showErr('Password must be at least 8 characters');
-  if (pwd !== pwd2)           return showErr('Passwords do not match');
-  if (!/[a-zA-Z]/.test(pwd)) return showErr('Password must contain at least one letter');
-  if (!/\d/.test(pwd))        return showErr('Password must contain at least one number');
+  errEl.style.display = 'none';
+  succEl.style.display = 'none';
 
-  if (!turnstileSignupToken) {
-    return showErr('Please wait for the security check to complete.');
+  if (!email) {
+    errEl.textContent = 'Please enter your email address.';
+    errEl.style.display = 'block';
+    return;
   }
-  const captchaToken = turnstileSignupToken;
-  turnstileSignupToken = '';
 
-  btn.disabled = true; btn.textContent = '⏳ Creating account…';
+  btn.disabled = true; btn.textContent = '⏳ Sending…';
+  try {
+    await auth.forgotPassword(email);
+    succEl.textContent = '✅ If this email is registered, a password reset link has been sent. Check your inbox (and spam folder).';
+    succEl.style.display = 'block';
+    btn.textContent = 'Send Reset Link';
+    btn.disabled = false;
+  } catch (e) {
+    errEl.textContent = e.message || 'Failed to send reset link. Please try again.';
+    errEl.style.display = 'block';
+    btn.disabled = false; btn.textContent = 'Send Reset Link';
+  }
+}
+
+// ─── FORCE CHANGE PASSWORD (first login) ─────────────────────────────────────
+async function doForceChangePassword() {
+  const currentPwd = document.getElementById('fc-current')?.value;
+  const newPwd     = document.getElementById('fc-new')?.value;
+  const confirmPwd = document.getElementById('fc-confirm')?.value;
+  const errEl      = document.getElementById('fc-error');
+  const btn        = document.getElementById('fc-btn');
+
   errEl.style.display = 'none';
 
+  if (!currentPwd) return showFcErr('Please enter your current password (date of birth as DDMMYYYY).');
+  if (!newPwd || newPwd.length < 8) return showFcErr('New password must be at least 8 characters.');
+  if (!/[a-zA-Z]/.test(newPwd)) return showFcErr('New password must contain at least one letter.');
+  if (!/\d/.test(newPwd)) return showFcErr('New password must contain at least one number.');
+  if (newPwd !== confirmPwd) return showFcErr('Passwords do not match.');
+  if (newPwd === currentPwd) return showFcErr('New password must be different from your current password.');
+
+  function showFcErr(msg) {
+    errEl.textContent = msg; errEl.style.display = 'block';
+    btn.disabled = false; btn.textContent = 'Set Password & Continue →';
+  }
+
+  btn.disabled = true; btn.textContent = '⏳ Updating…';
+
   try {
-    const res = await enrollment.simpleSignup({
-      emp_id: empId, emp_name: name, email, password: pwd,
-      gender: gender || null,
-      date_of_birth: dob, date_of_joining: doj,
-      department: dept || null, designation: desig || null,
-      unit: unit || null,
-      mobile_number: mobile || null,
-      ctc_gmc_per_month: ctcGmc ? parseFloat(ctcGmc) : null,
-    }, captchaToken);
-
-    // Success — show green message then switch to login
-    errEl.style.cssText = 'display:block;background:#d1fae5;border:1px solid #a7f3d0;border-radius:8px;padding:10px 14px;font-size:13px;color:#065f46;margin-top:10px';
-    errEl.textContent = `✅ ${res.message || 'Account created!'} Redirecting to sign in…`;
-    btn.disabled = false; btn.textContent = 'Create Account →';
-
-    setTimeout(() => {
-      showAuthTab('login');
-      const emailInput = document.getElementById('login-email');
-      if (emailInput) emailInput.value = email;
-      document.querySelectorAll('.role-tab').forEach(t => t.classList.toggle('active', t.dataset.role === 'employee'));
-      selectedLoginRole = 'employee';
-      // Reset signup form
-      ['su-empid','su-name','su-email','su-pwd','su-pwd2','su-dob','su-doj','su-mobile','su-dept','su-desig'].forEach(id => {
-        const el = document.getElementById(id); if (el) el.value = '';
-      });
-      const gEl = document.getElementById('su-gender'); if (gEl) gEl.value = '';
-      const uEl = document.getElementById('su-unit'); if (uEl) uEl.value = '';
-      errEl.style.display = 'none';
-    }, 2200);
-  } catch(e) {
-    showErr(e.message || 'Signup failed. Please try again.');
+    await auth.changePassword(currentPwd, newPwd);
+    showToast('✅ Password changed successfully! Loading your dashboard…', 'success');
+    // Update local user state and proceed to app
+    const user = tokenStore.getUser();
+    if (user) { user.must_change_password = false; tokenStore.setUser(user); }
+    document.getElementById('login-page').style.display = 'none';
+    document.getElementById('app').style.display = '';
+    navigate('dashboard');
+  } catch (e) {
+    showFcErr(e.message || 'Failed to change password. Please try again.');
   }
 }
 
-window.showAuthTab   = showAuthTab;
-window.doSignup      = doSignup;
+// ─── CHANGE PASSWORD MODAL (for logged-in users) ──────────────────────────────
+function showChangePasswordModal() {
+  const modal = document.getElementById('change-password-modal');
+  modal.style.display = 'flex';
+  document.getElementById('cp-current').value = '';
+  document.getElementById('cp-new').value = '';
+  document.getElementById('cp-confirm').value = '';
+  document.getElementById('cp-error').style.display = 'none';
+  document.getElementById('cp-success').style.display = 'none';
+  document.getElementById('cp-btn').disabled = false;
+  document.getElementById('cp-btn').textContent = 'Update Password';
+}
+
+function hideChangePasswordModal() {
+  document.getElementById('change-password-modal').style.display = 'none';
+}
+
+async function doChangePassword() {
+  const currentPwd = document.getElementById('cp-current')?.value;
+  const newPwd     = document.getElementById('cp-new')?.value;
+  const confirmPwd = document.getElementById('cp-confirm')?.value;
+  const errEl      = document.getElementById('cp-error');
+  const succEl     = document.getElementById('cp-success');
+  const btn        = document.getElementById('cp-btn');
+
+  errEl.style.display = 'none';
+  succEl.style.display = 'none';
+
+  if (!currentPwd) return showCpErr('Please enter your current password.');
+  if (!newPwd || newPwd.length < 8) return showCpErr('New password must be at least 8 characters.');
+  if (!/[a-zA-Z]/.test(newPwd)) return showCpErr('New password must contain at least one letter.');
+  if (!/\d/.test(newPwd)) return showCpErr('New password must contain at least one number.');
+  if (newPwd !== confirmPwd) return showCpErr('New passwords do not match.');
+  if (newPwd === currentPwd) return showCpErr('New password must be different from current.');
+
+  function showCpErr(msg) {
+    errEl.textContent = msg; errEl.style.display = 'block';
+    btn.disabled = false; btn.textContent = 'Update Password';
+  }
+
+  btn.disabled = true; btn.textContent = '⏳ Updating…';
+
+  try {
+    await auth.changePassword(currentPwd, newPwd);
+    succEl.textContent = '✅ Password changed successfully!';
+    succEl.style.display = 'block';
+    btn.textContent = 'Update Password';
+    btn.disabled = false;
+    // Update local must_change_password flag
+    const user = tokenStore.getUser();
+    if (user) { user.must_change_password = false; tokenStore.setUser(user); }
+    setTimeout(() => hideChangePasswordModal(), 1800);
+  } catch (e) {
+    showCpErr(e.message || 'Failed to change password. Please try again.');
+  }
+}
+
+window.showLoginPanel          = showLoginPanel;
+window.showForgotPanel         = showForgotPanel;
+window.doForgotPassword        = doForgotPassword;
+window.doForceChangePassword   = doForceChangePassword;
+window.showChangePasswordModal = showChangePasswordModal;
+window.hideChangePasswordModal = hideChangePasswordModal;
+window.doChangePassword        = doChangePassword;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ─── MOBILE SIDEBAR TOGGLE ────────────────────────────────────────────────────

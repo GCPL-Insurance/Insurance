@@ -425,13 +425,13 @@ router.post('/login', authLimiter, async (req, res) => {
   }
 
   const { data: profile, error: profileErr } = await supabase
-    .from('user_profiles').select('role, emp_id, full_name, is_active').eq('id', data.user.id).single();
+    .from('user_profiles').select('role, emp_id, full_name, is_active, must_change_password').eq('id', data.user.id).single();
 
   if (profileErr || !profile)
-    return res.status(401).json({ error: 'Account not fully set up. Please contact admin.' });
+    return res.status(401).json({ error: 'Account not fully set up. Please contact HR.' });
   if (!profile.is_active) {
     await supabase.auth.admin.signOut(data.session.access_token).catch(() => {});
-    return res.status(403).json({ error: 'Account is deactivated. Contact admin.' });
+    return res.status(403).json({ error: 'Account is deactivated. Contact HR.' });
   }
 
   res.json({
@@ -441,6 +441,7 @@ router.post('/login', authLimiter, async (req, res) => {
     user: {
       id: data.user.id, email: data.user.email,
       role: profile.role || 'employee', emp_id: profile.emp_id, full_name: profile.full_name,
+      must_change_password: profile.must_change_password ?? false,
     },
   });
 });
@@ -481,140 +482,71 @@ router.get('/enrollment-data', requireAuth, enrollmentLimiter, async (req, res) 
   const { emp_id, id: userId } = req.user;
   if (!emp_id) return res.status(400).json({ error: 'No emp_id linked to your account. Contact HR.' });
 
-  // ── Fetch all data in parallel ────────────────────────────────────────────
-  // IMPORTANT: Promise.all is wrapped in try/catch. Before this fix, an unhandled
-  // rejection here (e.g. RLS block on employee_gmc_enrollment_insured) would crash
-  // Express mid-request and send NO response, freezing the UI on "Submitting…".
-  let empRes, rateRes, enrollRes, profileRes, depsRes, ctcTotalRes, empMainRes;
+  // ── All data from employees table (canonical). No onboarding fallback. ────
+  let empRes, rateRes, enrollRes, profileRes, depsRes, ctcTotalRes;
   try {
-    [empRes, rateRes, enrollRes, profileRes, depsRes, ctcTotalRes, empMainRes] = await Promise.all([
-      supabase.from('employee_onboarding')
-        .select('emp_id,emp_name,gender,date_of_birth,department,designation,date_of_joining,ctc_gmc_per_month,onboarding_status,mobile_number,email_id,unit,gmc_inclusion_date')
+    [empRes, rateRes, enrollRes, profileRes, depsRes, ctcTotalRes] = await Promise.all([
+      // 1. Employees — THE only source of employee data
+      supabase.from('employees')
+        .select('emp_id,emp_name,gender,date_of_birth,department,designation,date_of_joining,ctc_gmc_per_month,unit,gmc_inclusion_date,gmc_effective_date,email_id,is_active,status')
         .eq('emp_id', emp_id).single(),
+      // 2. Rate cards for sum insured options
       supabase.from('gmc_rate_cards')
         .select('rate_card_id,rate_card_type,age_band_from,age_band_to,sum_insured,annual_premium')
         .eq('rate_card_type', 'INSURER').order('sum_insured').order('age_band_from'),
+      // 3. Existing enrollment draft
       supabase.from('employee_gmc_enrollment')
         .select('*').eq('emp_id', emp_id).order('created_at', { ascending: false }).limit(1),
+      // 4. User profile for email
       supabase.from('user_profiles')
-        .select('email').eq('id', userId).single(),
-      // NOTE: This query was added 2 days ago. If the table has no RLS SELECT policy
-      // for the employee role, Supabase returns an error object (not an exception).
-      // We handle it below with a separate depsRes.error check so it never crashes.
+        .select('email, must_change_password').eq('id', userId).single(),
+      // 5. Saved insured members
       supabase.from('employee_gmc_enrollment_insured')
         .select('*').eq('emp_id', emp_id),
-      // Fetch pre-calculated total CTC GMC from the view (sum of slab-timeline).
-      // If a value exists here it takes precedence over the prorated formula on the frontend.
+      // 6. CTC GMC total from view — THE only source, no JS fallback
       supabase.from('vw_employee_ctc_gmc_total')
         .select('total_ctc_gmc').eq('emp_id', emp_id).single(),
-      // Fetch full employee record from the canonical employees table.
-      // employees is the authoritative source — employee_onboarding is the fallback.
-      supabase.from('employees')
-        .select('emp_id,emp_name,gender,date_of_birth,department,designation,date_of_joining,ctc_gmc_per_month,unit,gmc_inclusion_date,gmc_effective_date,is_active,status')
-        .eq('emp_id', emp_id).single(),
     ]);
   } catch (err) {
-    // Should not happen with Supabase client (it resolves errors, not rejects),
-    // but guard anyway against any unexpected network-level throw.
-    console.error('[enrollment-data] Promise.all threw unexpectedly:', err.message);
-    return res.status(500).json({ error: 'Failed to load enrollment data. Please refresh and try again.' });
+    console.error('[enrollment-data] fetch error:', err.message);
+    return res.status(500).json({ error: 'Failed to load enrollment data. Please refresh.' });
   }
 
-  // Log RLS/permission errors on the insured table without crashing the response.
-  // ACTION REQUIRED: If you see this log, add a SELECT RLS policy on
-  // employee_gmc_enrollment_insured allowing employees to read rows where emp_id matches.
-  if (depsRes?.error) {
-    console.error('[enrollment-data] employee_gmc_enrollment_insured query failed:',
-      depsRes.error.message, '| code:', depsRes.error.code,
-      '| hint: add RLS SELECT policy for employee role on this table');
-  }
+  const emp = empRes?.data;
+  if (!emp) return res.status(404).json({ error: 'Employee record not found. Please contact HR.' });
+  if (!emp.is_active) return res.status(403).json({ error: 'Your account is inactive. Contact HR.' });
 
-  // ── Resolve employee record: employees table is PRIMARY, employee_onboarding is FALLBACK ──
-  //
-  // Priority chain for each field:
-  //   1. public.employees        — canonical HR master, always most complete
-  //   2. public.employee_onboarding — may have been created via self-signup with partial data
-  //   3. employee_gmc_enrollment  — last-resort (enrollment draft may carry some fields)
-  //   4. user_profiles            — absolute last resort (name/email only)
-  //
-  // This fixes the "Incomplete Profile" screen caused by employees whose employee_onboarding
-  // row has null date_of_birth / date_of_joining but whose employees row is fully populated.
-
-  const mainEmp = empMainRes?.data;   // from public.employees
-  const onboarding = empRes?.data;    // from public.employee_onboarding
-
-  // Helper: pick first non-null value across sources
-  const pick = (...vals) => vals.find(v => v !== null && v !== undefined) ?? null;
-
-  let employeeData = null;
-
-  if (mainEmp || onboarding) {
-    employeeData = {
-      emp_id:              pick(mainEmp?.emp_id,              onboarding?.emp_id),
-      emp_name:            pick(mainEmp?.emp_name,            onboarding?.emp_name),
-      gender:              pick(mainEmp?.gender,              onboarding?.gender),
-      date_of_birth:       pick(mainEmp?.date_of_birth,       onboarding?.date_of_birth),
-      date_of_joining:     pick(mainEmp?.date_of_joining,     onboarding?.date_of_joining),
-      department:          pick(mainEmp?.department,          onboarding?.department),
-      designation:         pick(mainEmp?.designation,         onboarding?.designation),
-      ctc_gmc_per_month:   pick(mainEmp?.ctc_gmc_per_month,   onboarding?.ctc_gmc_per_month),
-      mobile_number:       pick(onboarding?.mobile_number,    null),
-      email_id:            pick(onboarding?.email_id,         null),
-      unit:                pick(mainEmp?.unit,                onboarding?.unit),
-      gmc_inclusion_date:  pick(mainEmp?.gmc_inclusion_date,  onboarding?.gmc_inclusion_date),
-      gmc_effective_date:  pick(mainEmp?.gmc_effective_date,  null),
-      onboarding_status:   pick(onboarding?.onboarding_status, 'pending'),
-      _source:             mainEmp ? (onboarding ? 'merged' : 'employees_only') : 'onboarding_only',
-    };
-  }
-
-  // Fallback to enrollment draft fields if both tables missed
-  if (!employeeData && enrollRes.data?.[0]) {
-    const e = enrollRes.data[0];
-    employeeData = {
-      emp_id: e.emp_id, emp_name: e.emp_name, gender: e.gender,
-      date_of_birth: e.date_of_birth, department: e.department,
-      designation: e.designation, date_of_joining: e.date_of_joining,
-      ctc_gmc_per_month: e.ctc_gmc_per_month, onboarding_status: 'pending',
-      gmc_inclusion_date: null, _is_new_employee: true,
-    };
-  }
-
-  // Last resort: user_profiles (name only — employee will see Incomplete Profile screen)
-  if (!employeeData) {
-    const { data: profileFallback } = await supabase
-      .from('user_profiles').select('emp_id, full_name, email').eq('id', userId).single();
-    if (profileFallback?.emp_id) {
-      employeeData = {
-        emp_id: profileFallback.emp_id,
-        emp_name: profileFallback.full_name || profileFallback.emp_id,
-        gender: null, date_of_birth: null, department: null,
-        designation: null, date_of_joining: null,
-        ctc_gmc_per_month: 0, onboarding_status: 'pending',
-        gmc_inclusion_date: null, _is_new_employee: true, _profile_only: true,
-      };
-    } else {
-      return res.status(404).json({ error: 'Employee record not found. Please contact HR.' });
-    }
-  }
-
-  console.log(`[enrollment-data] emp_id=${emp_id} source=${employeeData._source || 'fallback'} dob=${employeeData.date_of_birth} doj=${employeeData.date_of_joining} gmc_inclusion=${employeeData.gmc_inclusion_date}`);
+  if (depsRes?.error)
+    console.warn('[enrollment-data] insured fetch error:', depsRes.error.message);
 
   const enrollmentDraft = enrollRes.data?.[0] || null;
 
+  console.log(`[enrollment-data] emp_id=${emp_id} source=employees dob=${emp.date_of_birth} gmc_effective=${emp.gmc_effective_date}`);
+
   res.json({
-    employee: employeeData,
-    rate_cards: rateRes.data || [],
-    enrollment: enrollmentDraft,
-    profile: {
-      mobile_number: empRes.data?.mobile_number || enrollmentDraft?.mobile_number || null,
-      email:         empRes.data?.email_id       || profileRes.data?.email         || enrollmentDraft?.email_id || null,
+    employee: {
+      emp_id:             emp.emp_id,
+      emp_name:           emp.emp_name,
+      gender:             emp.gender,
+      date_of_birth:      emp.date_of_birth,
+      date_of_joining:    emp.date_of_joining,
+      department:         emp.department,
+      designation:        emp.designation,
+      ctc_gmc_per_month:  emp.ctc_gmc_per_month,
+      unit:               emp.unit,
+      gmc_inclusion_date: emp.gmc_inclusion_date,
+      gmc_effective_date: emp.gmc_effective_date,
+      // email_id from employees table (HR uploaded)
+      email_id:           emp.email_id || profileRes.data?.email || null,
+      _source:            'employees',
     },
-    // Returns [] on RLS error so the form still loads — employee can re-add dependents.
-    // Fix the RLS policy in Supabase to restore pre-population of saved dependents.
+    rate_cards:          rateRes.data || [],
+    enrollment:          enrollmentDraft,
+    profile: {
+      email: emp.email_id || profileRes.data?.email || enrollmentDraft?.email_id || null,
+    },
     existing_dependents: depsRes?.data || [],
-    // Pre-calculated total CTC GMC from vw_employee_ctc_gmc_total.
-    // null means no view row exists for this employee → frontend falls back to proration formula.
+    // From vw_employee_ctc_gmc_total only — null = not on GMC yet (no proration fallback)
     ctc_gmc_total_from_view: ctcTotalRes?.data?.total_ctc_gmc ?? null,
   });
 });
@@ -896,14 +828,90 @@ router.patch('/update-ctc', requireAuth, async (req, res) => {
 });
 
 // ─── GET /api/auth/me ─────────────────────────────────────────────────────────
-// Protected: validate token and return fresh user data.
 router.get('/me', requireAuth, async (req, res) => {
   const { id: userId } = req.user;
   const { data: profile, error } = await supabase
-    .from('user_profiles').select('role, emp_id, full_name, is_active, email').eq('id', userId).single();
+    .from('user_profiles').select('role, emp_id, full_name, is_active, email, must_change_password').eq('id', userId).single();
   if (error || !profile) return res.status(401).json({ error: 'Profile not found.' });
   if (!profile.is_active) return res.status(403).json({ error: 'Account is deactivated.' });
   res.json({ user: { id: userId, ...profile } });
+});
+
+// ─── POST /api/auth/forgot-password ──────────────────────────────────────────
+// Public: employee enters their email, receives a one-time reset token.
+// Backend sends email via Supabase auth's built-in password reset email
+// (uses Supabase SMTP settings — no extra SMTP config needed).
+router.post('/forgot-password', authLimiter, async (req, res) => {
+  const { email } = req.body;
+  if (!email) return res.status(400).json({ error: 'Email is required.' });
+
+  const emailNorm = email.trim().toLowerCase();
+
+  // Verify the email belongs to an employee (don't leak which emails exist)
+  const { data: profile } = await supabase
+    .from('user_profiles').select('id, is_active').eq('email', emailNorm).single();
+
+  // Always respond success to prevent email enumeration attacks
+  if (!profile || !profile.is_active) {
+    return res.json({ success: true, message: 'If this email is registered, a reset link has been sent.' });
+  }
+
+  // Use Supabase built-in password reset (sends email via your Supabase SMTP config)
+  const { error } = await supabase.auth.resetPasswordForEmail(emailNorm, {
+    redirectTo: `${process.env.FRONTEND_URL || 'https://gcpl.insurance-portal.in'}/reset-password`,
+  });
+
+  if (error) {
+    console.error('[forgot-password] Supabase error:', error.message);
+    // Don't expose internal errors — return generic success
+  }
+
+  res.json({ success: true, message: 'If this email is registered, a reset link has been sent.' });
+});
+
+// ─── POST /api/auth/change-password ──────────────────────────────────────────
+// Protected: authenticated employee changes their own password.
+// Clears must_change_password flag on success.
+router.post('/change-password', requireAuth, async (req, res) => {
+  const { id: userId, emp_id } = req.user;
+  const { current_password, new_password } = req.body;
+
+  if (!current_password || !new_password)
+    return res.status(400).json({ error: 'current_password and new_password are required.' });
+
+  const pwErr = validatePassword(new_password);
+  if (pwErr) return res.status(400).json({ error: pwErr });
+
+  if (current_password === new_password)
+    return res.status(400).json({ error: 'New password must be different from your current password.' });
+
+  // Verify current password by attempting re-authentication
+  const { data: userCheck } = await supabase.auth.admin.getUserById(userId);
+  const userEmail = userCheck?.user?.email;
+  if (!userEmail) return res.status(400).json({ error: 'Could not verify identity.' });
+
+  const { error: verifyErr } = await supabase.auth.signInWithPassword({
+    email: userEmail, password: current_password,
+  });
+  if (verifyErr)
+    return res.status(401).json({ error: 'Current password is incorrect.' });
+
+  // Update password
+  const { error: updateErr } = await supabase.auth.admin.updateUserById(userId, {
+    password: new_password,
+  });
+  if (updateErr) {
+    console.error('[change-password] update failed:', updateErr.message);
+    return res.status(400).json({ error: 'Password update failed. Please try again.' });
+  }
+
+  // Clear must_change_password flag
+  await supabase.from('user_profiles')
+    .update({ must_change_password: false })
+    .eq('id', userId);
+
+  console.log('[change-password] emp_id', emp_id, 'changed password successfully');
+  res.json({ success: true, message: 'Password changed successfully.' });
 });
 
 export default router;

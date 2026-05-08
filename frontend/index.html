@@ -53,19 +53,13 @@
       </div>
     </div>
 
-    <!-- Login / Signup Toggle -->
-    <div style="display:flex;gap:0;background:#f8faff;border-radius:12px;padding:3px;margin-bottom:20px;border:1px solid #dde4f0">
-      <button id="tab-login" onclick="showAuthTab('login')" style="flex:1;padding:9px;border-radius:10px;border:none;background:white;color:#1d4ed8;font-weight:700;font-size:13px;cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,.08);font-family:inherit">🔑 Sign In</button>
-      <button id="tab-signup" onclick="showAuthTab('signup')" style="flex:1;padding:9px;border-radius:10px;border:none;background:transparent;color:#64748b;font-weight:600;font-size:13px;cursor:pointer;font-family:inherit">✍️ New Employee? Sign Up</button>
-    </div>
-
     <!-- LOGIN PANEL -->
     <div id="login-panel">
       <div class="login-title">Welcome back</div>
-      <div class="login-sub">Sign in with your email — your access level is set automatically</div>
+      <div class="login-sub">Sign in with your company email — your access is set by HR</div>
       <div class="form-group">
         <label class="form-label">Email Address</label>
-        <input type="email" id="login-email" class="form-input" placeholder="you@company.com">
+        <input type="email" id="login-email" class="form-input" placeholder="you@globalcalciumpharma.com">
       </div>
       <div class="form-group">
         <label class="form-label">Password</label>
@@ -75,101 +69,58 @@
       <div id="turnstile-login" style="margin-bottom:12px;display:flex;justify-content:center"></div>
       <button class="btn-login" id="login-btn" onclick="doLogin()">Sign In</button>
       <div class="login-error" id="login-error"></div>
-    </div>
-
-    <!-- SIGNUP PANEL -->
-    <div id="signup-panel" style="display:none">
-      <div class="login-title">New Employee Registration</div>
-      <div class="login-sub">Fill in your details to create your portal account</div>
-
-      <!-- SINGLE STEP FORM — No emp_id verification required -->
-      <div id="signup-form">
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
-          <div class="form-group" style="margin-bottom:0">
-            <label class="form-label">Employee ID <span style="color:#dc2626">*</span></label>
-            <input type="text" id="su-empid" class="form-input" placeholder="e.g. U3-1445" style="text-transform:uppercase">
-          </div>
-          <div class="form-group" style="margin-bottom:0">
-            <label class="form-label">Full Name <span style="color:#dc2626">*</span></label>
-            <input type="text" id="su-name" class="form-input" placeholder="As per records">
-          </div>
-        </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
-          <div class="form-group" style="margin-bottom:0">
-            <label class="form-label">Date of Birth <span style="color:#dc2626">*</span></label>
-            <input type="date" id="su-dob" class="form-input">
-          </div>
-          <div class="form-group" style="margin-bottom:0">
-            <label class="form-label">Gender</label>
-            <select id="su-gender" class="form-input" style="cursor:pointer">
-              <option value="">Select</option>
-              <option value="Male">Male</option>
-              <option value="Female">Female</option>
-              <option value="Other">Other</option>
-            </select>
-          </div>
-        </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
-          <div class="form-group" style="margin-bottom:0">
-            <label class="form-label">Date of Joining <span style="color:#dc2626">*</span></label>
-            <input type="date" id="su-doj" class="form-input">
-          </div>
-          <div class="form-group" style="margin-bottom:0">
-            <label class="form-label">Mobile Number</label>
-            <input type="tel" id="su-mobile" class="form-input" placeholder="10-digit number">
-          </div>
-        </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
-          <div class="form-group" style="margin-bottom:0">
-            <label class="form-label">Department</label>
-            <input type="text" id="su-dept" class="form-input" placeholder="e.g. Operations">
-          </div>
-          <div class="form-group" style="margin-bottom:0">
-            <label class="form-label">Designation</label>
-            <input type="text" id="su-desig" class="form-input" placeholder="e.g. Executive">
-          </div>
-        </div>
-        <div class="form-group" style="margin-bottom:12px">
-          <label class="form-label">Unit <span style="color:#dc2626">*</span></label>
-          <select id="su-unit" class="form-input" style="cursor:pointer">
-            <option value="">— Select Unit —</option>
-            <option value="UNIT -1">Unit -1</option>
-            <option value="UNIT -2">Unit -2</option>
-            <option value="UNIT -3">Unit -3</option>
-            <option value="UNIT -4">Unit -4</option>
-            <option value="Quest">Quest</option>
-            <option value="Corporate">Corporate</option>
-            <option value="Driver">Driver</option>
-            <option value="Other">Other</option>
-          </select>
-        </div>
-        <div class="form-group" style="margin-bottom:12px">
-          <label class="form-label">Monthly CTC GMC (₹) <span style="color:#64748b;font-size:11px">— Company contribution towards GMC premium</span></label>
-          <input type="number" id="su-ctc-gmc" class="form-input" placeholder="e.g. 1500 (enter 0 if not known)" min="0" step="0.01">
-        </div>
-        <div class="form-group" style="margin-bottom:12px">
-          <label class="form-label">Email Address <span style="color:#dc2626">*</span></label>
-          <input type="email" id="su-email" class="form-input" placeholder="your@email.com">
-        </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px">
-          <div class="form-group" style="margin-bottom:0">
-            <label class="form-label">Password <span style="color:#dc2626">*</span></label>
-            <input type="password" id="su-pwd" class="form-input" placeholder="Min 8 characters">
-          </div>
-          <div class="form-group" style="margin-bottom:0">
-            <label class="form-label">Confirm Password <span style="color:#dc2626">*</span></label>
-            <input type="password" id="su-pwd2" class="form-input" placeholder="Re-enter password">
-          </div>
-        </div>
-        <!-- Cloudflare Turnstile -->
-        <div id="turnstile-signup" style="margin-bottom:12px;display:flex;justify-content:center"></div>
-        <button class="btn-login" onclick="doSignup()" id="su-register-btn">Create Account →</button>
-        <div class="login-error" id="su-error" style="display:none"></div>
+      <div style="text-align:center;margin-top:14px">
+        <button onclick="showForgotPanel()" style="background:none;border:none;color:#1d4ed8;font-size:13px;cursor:pointer;text-decoration:underline;font-family:inherit">
+          Forgot password?
+        </button>
       </div>
     </div>
 
+    <!-- FORGOT PASSWORD PANEL -->
+    <div id="forgot-panel" style="display:none">
+      <div class="login-title">Reset Password</div>
+      <div class="login-sub">Enter your company email — we'll send a reset link</div>
+      <div class="form-group">
+        <label class="form-label">Email Address</label>
+        <input type="email" id="forgot-email" class="form-input" placeholder="you@globalcalciumpharma.com"
+          onkeydown="if(event.key==='Enter')doForgotPassword()">
+      </div>
+      <button class="btn-login" id="forgot-btn" onclick="doForgotPassword()">Send Reset Link</button>
+      <div class="login-error" id="forgot-error" style="display:none"></div>
+      <div id="forgot-success" style="display:none;background:#d1fae5;border:1px solid #a7f3d0;border-radius:8px;padding:12px 14px;font-size:13px;color:#065f46;margin-top:10px;line-height:1.6"></div>
+      <div style="text-align:center;margin-top:14px">
+        <button onclick="showLoginPanel()" style="background:none;border:none;color:#64748b;font-size:13px;cursor:pointer;font-family:inherit">
+          ← Back to Sign In
+        </button>
+      </div>
+    </div>
+
+    <!-- FORCE CHANGE PASSWORD PANEL (shown after first login) -->
+    <div id="force-change-panel" style="display:none">
+      <div style="background:#fef3c7;border:1px solid #fcd34d;border-radius:10px;padding:14px 16px;margin-bottom:20px;font-size:13px;color:#92400e;line-height:1.6">
+        🔑 <strong>First-time login detected.</strong><br>
+        Your default password is your date of birth (DDMMYYYY). You must set a new password to continue.
+      </div>
+      <div class="login-title" style="font-size:18px">Set Your New Password</div>
+      <div class="form-group">
+        <label class="form-label">Current Password (DOB as DDMMYYYY)</label>
+        <input type="password" id="fc-current" class="form-input" placeholder="e.g. 15051990">
+      </div>
+      <div class="form-group">
+        <label class="form-label">New Password <span style="color:#64748b;font-size:11px">— min 8 chars, at least one letter and number</span></label>
+        <input type="password" id="fc-new" class="form-input" placeholder="Choose a strong password">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Confirm New Password</label>
+        <input type="password" id="fc-confirm" class="form-input" placeholder="Re-enter new password"
+          onkeydown="if(event.key==='Enter')doForceChangePassword()">
+      </div>
+      <button class="btn-login" id="fc-btn" onclick="doForceChangePassword()">Set Password & Continue →</button>
+      <div class="login-error" id="fc-error" style="display:none"></div>
+    </div>
+
     <div style="margin-top:18px;padding-top:14px;border-top:1px solid #e2e8f0;font-size:11px;color:#64748b;text-align:center">
-      🔒 Secure portal — all data goes through your backend API
+      🔒 Secure portal — accounts are created by HR · Contact HR if you need access
     </div>
   </div>
 </div>
@@ -190,6 +141,7 @@
     <div class="topbar-spacer"></div>
     <div class="topbar-badge" id="topbar-badge"></div>
     <div class="topbar-user" id="topbar-user"></div>
+    <button onclick="showChangePasswordModal()" style="background:none;border:1px solid #cbd5e1;border-radius:8px;padding:6px 12px;font-size:12px;color:#475569;cursor:pointer;font-family:inherit;margin-right:6px" title="Change Password">🔑 Password</button>
     <button class="btn-logout" onclick="doLogout()">Sign Out</button>
   </div>
 
@@ -337,5 +289,31 @@
 </nav>
 
 <script type="module" src="/src/main.js"></script>
+<!-- Change Password Modal -->
+<div id="change-password-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:none;align-items:center;justify-content:center">
+  <div style="background:white;border-radius:16px;padding:32px;width:100%;max-width:420px;margin:16px;box-shadow:0 20px 60px rgba(0,0,0,.2)">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">
+      <div style="font-size:18px;font-weight:800;color:#0f172a">🔑 Change Password</div>
+      <button onclick="hideChangePasswordModal()" style="background:none;border:none;font-size:20px;cursor:pointer;color:#64748b;line-height:1">×</button>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Current Password</label>
+      <input type="password" id="cp-current" class="form-input" placeholder="Your current password">
+    </div>
+    <div class="form-group">
+      <label class="form-label">New Password <span style="color:#64748b;font-size:11px">min 8 chars, letter + number</span></label>
+      <input type="password" id="cp-new" class="form-input" placeholder="Choose a strong password">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Confirm New Password</label>
+      <input type="password" id="cp-confirm" class="form-input" placeholder="Re-enter new password"
+        onkeydown="if(event.key==='Enter')doChangePassword()">
+    </div>
+    <div id="cp-error" style="display:none;background:#fee2e2;border:1px solid #fca5a5;border-radius:8px;padding:10px 14px;font-size:13px;color:#991b1b;margin-bottom:12px"></div>
+    <div id="cp-success" style="display:none;background:#d1fae5;border:1px solid #a7f3d0;border-radius:8px;padding:10px 14px;font-size:13px;color:#065f46;margin-bottom:12px"></div>
+    <button id="cp-btn" onclick="doChangePassword()" class="btn-login" style="margin-bottom:0">Update Password</button>
+  </div>
+</div>
+
 </body>
 </html>

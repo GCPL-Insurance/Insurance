@@ -146,7 +146,6 @@ export const auth = {
   },
   me: () => tokenStore.getUser(),
   isLoggedIn: () => !!tokenStore.get(),
-  // Validate token with server and get fresh user data
   validate: async () => {
     const data = await apiFetch('/auth/me');
     if (data?.user) {
@@ -155,7 +154,6 @@ export const auth = {
     }
     return null;
   },
-  // Called from the invite set-password page — tokens come from URL hash
   setPassword: async (access_token, refresh_token, new_password) => {
     const data = await apiFetch('/auth/set-password', {
       method: 'POST',
@@ -166,6 +164,16 @@ export const auth = {
     tokenStore.setUser(data.user);
     return data.user;
   },
+  // Send forgot-password email
+  forgotPassword: (email) => apiFetch('/auth/forgot-password', {
+    method: 'POST',
+    body: JSON.stringify({ email }),
+  }),
+  // Change password for logged-in user (clears must_change_password flag)
+  changePassword: (current_password, new_password) => apiFetch('/auth/change-password', {
+    method: 'POST',
+    body: JSON.stringify({ current_password, new_password }),
+  }),
 };
 
 // ─── Tables ───────────────────────────────────────────────────────────────────
