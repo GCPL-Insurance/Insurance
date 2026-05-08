@@ -411,17 +411,39 @@ router.post('/set-password', async (req, res) => {
 // ─── POST /api/auth/login ─────────────────────────────────────────────────────
 router.post('/login', authLimiter, async (req, res) => {
   const { email, password, captchaToken } = req.body;
-  if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
+  if (!email || !password) return res.status(400).json({ error: 'Email and password are required.' });
+
+  const emailNorm = email.trim().toLowerCase();
 
   const captchaResult = await verifyCaptcha(captchaToken, req.ip);
   if (!captchaResult.success) return res.status(400).json({ error: captchaResult.error });
 
-  const { data, error } = await supabase.auth.signInWithPassword({
-    email: email.trim().toLowerCase(), password,
-  });
+  // Check if user exists in our system first — gives a specific "no account" message
+  const { data: profileCheck } = await supabase
+    .from('user_profiles').select('id, is_active, emp_id').eq('email', emailNorm).single();
+
+  if (!profileCheck) {
+    return res.status(401).json({ error: 'No account found for this email. Contact HR if you need access.' });
+  }
+  if (!profileCheck.is_active) {
+    return res.status(403).json({ error: 'Your account has been deactivated. Please contact HR.' });
+  }
+
+  const { data, error } = await supabase.auth.signInWithPassword({ email: emailNorm, password });
+
   if (error) {
-    console.warn('[login] failed for', email.trim().toLowerCase(), ':', error.message);
-    return res.status(401).json({ error: 'Invalid email or password.' });
+    console.warn('[login] failed for', emailNorm, ':', error.message);
+    // Map Supabase auth error codes to human-readable messages
+    const msg = error.message?.toLowerCase() || '';
+    if (msg.includes('invalid login') || msg.includes('invalid credentials') || msg.includes('wrong password'))
+      return res.status(401).json({ error: 'Incorrect password. Please try again.' });
+    if (msg.includes('email not confirmed'))
+      return res.status(401).json({ error: 'Email not confirmed. Please contact HR.' });
+    if (msg.includes('too many') || msg.includes('rate limit'))
+      return res.status(429).json({ error: 'Too many failed attempts. Please wait a few minutes before trying again.' });
+    if (msg.includes('locked') || msg.includes('disabled'))
+      return res.status(403).json({ error: 'Account is locked due to too many failed attempts. Contact HR to unlock.' });
+    return res.status(401).json({ error: 'Incorrect password. Please try again.' });
   }
 
   const { data: profile, error: profileErr } = await supabase
@@ -431,7 +453,7 @@ router.post('/login', authLimiter, async (req, res) => {
     return res.status(401).json({ error: 'Account not fully set up. Please contact HR.' });
   if (!profile.is_active) {
     await supabase.auth.admin.signOut(data.session.access_token).catch(() => {});
-    return res.status(403).json({ error: 'Account is deactivated. Contact HR.' });
+    return res.status(403).json({ error: 'Your account has been deactivated. Contact HR.' });
   }
 
   res.json({

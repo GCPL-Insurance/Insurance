@@ -16,14 +16,9 @@ let state = {
 
 // ─── TABLE DEFINITIONS ─────────────────────────────────────────────────────────
 const TABLES = {
-  t_employee_onboarding: {
-    name: 'employee_onboarding', label: 'Employee Onboarding', key: 'emp_id',
-    columns: ['emp_id','emp_name','gender','date_of_birth','date_of_joining','department','designation','ctc_gmc_per_month','onboarding_status','created_at'],
-    insertable: true,
-  },
   t_employees: {
     name: 'employees', label: 'Employees', key: 'id',
-    columns: ['id','emp_id','emp_name','gender','department','designation','date_of_joining','date_of_birth','ctc','ctc_gmc_per_month','unit','status','is_active','gmc_inclusion_date','gmc_effective_date','exit_date','exit_type','last_working_day','claimed_this_year','remarks'],
+    columns: ['id','emp_id','emp_name','gender','department','designation','date_of_joining','date_of_birth','ctc','ctc_gmc_per_month','unit','status','is_active','email_id','mobile_number','gmc_inclusion_date','gmc_effective_date','exit_date','exit_type','last_working_day','claimed_this_year','remarks'],
     insertable: true,
   },
   t_blood_group: {
@@ -1985,16 +1980,18 @@ async function renderEnrollmentForm() {
       return;
     }
 
-    // Pre-fill mobile/email: priority = existing enrollment → profile (signup data)
+    // Pre-fill mobile/email: employees table is primary source (after migration)
+    const empMobile = data.employee?.mobile_number || '';
+    const empEmail  = data.employee?.email_id || data.profile?.email || '';
     if (data.enrollment) {
-      enrollState.mobile = data.enrollment.mobile_number || data.profile?.mobile_number || '';
-      enrollState.email  = data.enrollment.email_id || data.profile?.email || '';
+      enrollState.mobile = data.enrollment.mobile_number || empMobile || '';
+      enrollState.email  = data.enrollment.email_id || empEmail || '';
       enrollState.selectedSI = Number(data.enrollment.selected_sum_insured) || 0;
       enrollState.termsAccepted = data.enrollment.terms_accepted || false;
     } else {
-      // No draft yet — pre-fill from signup profile
-      enrollState.mobile = data.profile?.mobile_number || '';
-      enrollState.email  = data.profile?.email || '';
+      // No draft yet — pre-fill from employees table
+      enrollState.mobile = empMobile;
+      enrollState.email  = empEmail;
     }
 
     renderEnrollStep(1);
@@ -2726,9 +2723,15 @@ async function submitEnrollment() {
     if (btn) { btn.disabled = false; btn.textContent = '🚀 Submit Enrollment'; }
   };
 
-  if (btn) {
-    btn.disabled = true;
-    btn.textContent = '⏳ Submitting…';
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Submitting…'; }
+
+  // Guard: if a previous click already submitted successfully (common on network retry),
+  // skip re-submitting — the backend idempotency check handles this, but short-circuit here
+  // to avoid a confusing error→success two-step.
+  if (enrollState.existingEnrollment?.enrollment_status === 'SUBMITTED') {
+    showEnrollmentSuccessModal();
+    setTimeout(() => renderEnrollmentForm(), 1000);
+    return;
   }
 
   // ── Client-side safety timeout ────────────────────────────────────────────
@@ -3524,14 +3527,14 @@ async function renderEmployeeDashboardV2() {
 
   const data   = result?.data || {};
   const emp    = data.employees?.[0];
-  const onboarding = data.employee_onboarding?.[0]; // preferred source for ctc_gmc_per_month
+  // All data from employees table — employee_onboarding is no longer used
   const deps   = data.insurance_dependents || [];
   const enroll = data.employee_gmc_enrollment?.[0];
   const claims = data.employee_gmc_claims || [];
   const fins   = data.employee_gmc_financials_25_26?.[0];
 
-  // Use onboarding table as primary source for ctc_gmc_per_month (employees table may be stale)
-  const ctcGmcVal = onboarding?.ctc_gmc_per_month ?? emp?.ctc_gmc_per_month ?? null;
+  // ctc_gmc_per_month comes exclusively from employees table
+  const ctcGmcVal = emp?.ctc_gmc_per_month ?? null;
 
   const fmtCurr = (v) => v ? '₹' + Number(v).toLocaleString('en-IN') : '—';
   // fmtDate() is the module-level function defined below — no local redefinition needed

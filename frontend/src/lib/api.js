@@ -80,8 +80,12 @@ export async function apiFetch(path, options = {}) {
 
   let res = await fetchWithRetry(`${API_BASE}${path}`, { ...options, headers }, isMutation ? 1 : 0);
 
-  // Auto-refresh on 401
-  if (res.status === 401 && tokenStore.getRefresh()) {
+  // Auto-refresh on 401 — but NOT for auth routes (login/logout/forgot-password)
+  // Auth routes returning 401 mean wrong credentials, not expired tokens.
+  const isAuthRoute = path.startsWith('/auth/login') || path.startsWith('/auth/logout') ||
+    path.startsWith('/auth/forgot') || path.startsWith('/auth/change-password');
+
+  if (res.status === 401 && !isAuthRoute && tokenStore.getRefresh()) {
     const newToken = await refreshToken();
     if (newToken) {
       res = await fetchWithRetry(`${API_BASE}${path}`, {
@@ -91,7 +95,7 @@ export async function apiFetch(path, options = {}) {
     }
   }
 
-  if (res.status === 401) {
+  if (res.status === 401 && !isAuthRoute) {
     tokenStore.clear();
     window.location.reload();
     return;

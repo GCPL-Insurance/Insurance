@@ -306,34 +306,66 @@ router.patch('/enrollments/:id', async (req, res) => {
   if (!['APPROVED', 'REJECTED', 'CORRECTION_REQUIRED'].includes(action))
     return res.status(400).json({ error: 'Invalid action. Must be APPROVED, REJECTED, or CORRECTION_REQUIRED' });
 
-  const reviewerName = req.user.full_name || req.user.emp_id || 'Admin';
-  const now = new Date().toISOString();
+  // ── 25s server-side timeout guard ─────────────────────────────────────────
+  // Prevents Render.com from sending an HTML 502 when Supabase is slow.
+  let responded = false;
+  const timeoutId = setTimeout(() => {
+    if (!responded) {
+      responded = true;
+      res.status(503).json({ error: 'Action timed out. Please refresh — your action may have saved. If status unchanged, try again.' });
+    }
+  }, 25000);
 
-  const updates = {
-    enrollment_status: action === 'CORRECTION_REQUIRED' ? 'DRAFT' : action,
-    admin_remarks: admin_remarks?.trim() || null,
-    reviewed_by: reviewerName,
-    reviewed_at: now,
-    updated_at: now,
-    ...(action === 'APPROVED' ? { locked_at: now, locked_by: reviewerName } : {}),
+  const send = (status, body) => {
+    if (responded) return;
+    responded = true;
+    clearTimeout(timeoutId);
+    res.status(status).json(body);
   };
 
-  const { error } = await supabase.from('employee_gmc_enrollment').update(updates).eq('enrollment_id', id);
-  if (error) return res.status(400).json({ error: error.message });
+  try {
+    const reviewerName = req.user?.full_name || req.user?.emp_id || 'Admin';
+    const now = new Date().toISOString();
 
-  const { data: enrollment } = await supabase
-    .from('employee_gmc_enrollment').select('emp_id').eq('enrollment_id', id).single();
+    const updates = {
+      enrollment_status: action === 'CORRECTION_REQUIRED' ? 'DRAFT' : action,
+      admin_remarks: admin_remarks?.trim() || null,
+      reviewed_by: reviewerName,
+      reviewed_at: now,
+      updated_at: now,
+      ...(action === 'APPROVED' ? { locked_at: now, locked_by: reviewerName } : {}),
+    };
 
-  await supabase.from('employee_gmc_enrollment_audit').insert({
-    enrollment_id: id,
-    emp_id: enrollment?.emp_id,
-    action,
-    action_by: reviewerName,
-    remarks: admin_remarks?.trim() || null,
-    created_at: now,
-  }).catch(e => console.warn('[admin/enrollments PATCH] audit failed:', e.message));
+    const { error } = await supabase.from('employee_gmc_enrollment').update(updates).eq('enrollment_id', id);
+    if (error) return send(400, { error: error.message });
 
-  res.json({ success: true, action });
+    const { data: enroll } = await supabase
+      .from('employee_gmc_enrollment').select('emp_id').eq('enrollment_id', id).single();
+
+    // Audit log (non-fatal)
+    await supabase.from('employee_gmc_enrollment_audit').insert({
+      enrollment_id: id,
+      emp_id: enroll?.emp_id,
+      action,
+      action_by: reviewerName,
+      remarks: admin_remarks?.trim() || null,
+      created_at: now,
+    }).catch(e => console.warn('[admin/enrollments PATCH] audit failed:', e.message));
+
+    // Fire confirmation email if approved (non-blocking)
+    if (action === 'APPROVED' && process.env.SUPABASE_URL) {
+      fetch(`${process.env.SUPABASE_URL}/functions/v1/enrollment-confirmation`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}` },
+        body: JSON.stringify({ enrollment_id: id, secret: process.env.FUNCTION_SECRET || '' }),
+      }).catch(e => console.warn('[admin/enrollments PATCH] email failed:', e.message));
+    }
+
+    send(200, { success: true, action });
+  } catch (err) {
+    console.error('[admin/enrollments PATCH] error:', err.message);
+    send(500, { error: 'Action failed: ' + err.message });
+  }
 });
 
 export default router;
