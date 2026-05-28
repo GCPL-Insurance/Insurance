@@ -12,7 +12,9 @@ let state = {
   tableData: [], exportData: null,
   page: 0, pageSize: 25, empFilter: '', search: '',
   editingRow: null, currentView: null, totalCount: 0,
+  searchAllRows: null,   // ✅ holds the FULL dataset while a global search is active
 };
+let _searchDebounce = null;
 
 // ─── TABLE DEFINITIONS ─────────────────────────────────────────────────────────
 const TABLES = {
@@ -436,7 +438,7 @@ window.showLoginPage  = showLoginPage;
 // ─── NAVIGATION ───────────────────────────────────────────────────────────────
 function _origNavigate(page) {
   state.currentPage = page;
-  state.page = 0; state.search = ''; state.empFilter = '';
+  state.page = 0; state.search = ''; state.empFilter = ''; state.searchAllRows = null;
 
   document.querySelectorAll('.sidebar-item').forEach(el => {
     el.classList.toggle('active', el.dataset.page === page);
@@ -687,7 +689,7 @@ async function renderTable(pageKey) {
           ${isEmployee ? 'readonly style="cursor:not-allowed;opacity:0.6"' : ''}
           oninput="${isEmployee ? '' : 'onEmpFilter(this.value)'}">
       </div>
-      <button class="btn btn-secondary" onclick="loadTableData('${pageKey}')">↺ Refresh</button>
+      <button class="btn btn-secondary" onclick="refreshTable('${pageKey}')">↺ Refresh</button>
       <div style="margin-left:auto;display:flex;gap:8px">
         <button class="btn btn-secondary" onclick="exportExcelTable()">⬇️ Excel</button>
         <button class="btn btn-secondary" onclick="exportPDFTable()">📄 PDF</button>
@@ -706,23 +708,67 @@ async function loadTableData(pageKey) {
   const cont = document.getElementById('table-container');
   if (!cont) return;
 
+  // If a global search is active, route through the search path instead.
+  if (state.search && state.search.trim()) {
+    return loadSearchAll(pageKey);
+  }
+
   const params = { page: state.page, pageSize: state.pageSize };
   if (state.empFilter) params.emp_filter = state.empFilter;
 
   try {
-    // 🔒 Data fetch via backend API
+    // 🔒 Data fetch via backend API (server-side paginated — normal browsing mode)
     const res = await tables.list(tbl.name, params);
-    let rows = res?.data || [];
-    if (state.search) {
-      const s = state.search.toLowerCase();
-      rows = rows.filter(r => Object.values(r).some(v => String(v).toLowerCase().includes(s)));
-    }
-    state.tableData  = rows;
-    state.totalCount = res?.count || 0;
+    const rows = res?.data || [];
+    state.searchAllRows = null;          // not in search mode
+    state.tableData     = rows;
+    state.totalCount    = res?.count || 0;
     renderTableHTML(tbl, rows, pageKey);
   } catch(e) {
     cont.innerHTML = `<div class="empty-state"><div class="icon">⚠️</div>${e.message}</div>`;
   }
+}
+
+// ✅ GLOBAL SEARCH: fetch the ENTIRE table once (?all=1), then filter + paginate
+// client-side. This fixes the bug where searching only matched the visible page.
+async function loadSearchAll(pageKey) {
+  const tbl  = TABLES[pageKey];
+  const cont = document.getElementById('table-container');
+  if (!cont) return;
+
+  // Reuse the cached full dataset if we already fetched it for this table/filter.
+  if (state.searchAllRows) { renderSearchPage(pageKey); return; }
+
+  cont.innerHTML = `<div class="loading"><div class="spinner"></div> Searching all records…</div>`;
+  const params = { all: '1' };
+  if (state.empFilter) params.emp_filter = state.empFilter;
+
+  try {
+    const res = await tables.list(tbl.name, params);
+    state.searchAllRows = res?.data || [];
+    renderSearchPage(pageKey);
+  } catch(e) {
+    cont.innerHTML = `<div class="empty-state"><div class="icon">⚠️</div>${e.message}</div>`;
+  }
+}
+
+// Filter the cached full dataset by the search term, then paginate client-side.
+function renderSearchPage(pageKey) {
+  const tbl = TABLES[pageKey];
+  const s   = (state.search || '').trim().toLowerCase();
+  const all = state.searchAllRows || [];
+  const filtered = s
+    ? all.filter(r => Object.values(r).some(v => String(v ?? '').toLowerCase().includes(s)))
+    : all;
+
+  state.totalCount = filtered.length;
+  const totalPages = Math.max(1, Math.ceil(filtered.length / state.pageSize));
+  if (state.page >= totalPages) state.page = totalPages - 1;
+
+  const start    = state.page * state.pageSize;
+  const pageRows = filtered.slice(start, start + state.pageSize);
+  state.tableData = pageRows;
+  renderTableHTML(tbl, pageRows, pageKey);
 }
 
 function _origRenderTableHTML(tbl, rows, pageKey) {
@@ -786,12 +832,47 @@ function formatCell(col, val) {
 
 function escHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
-function changePage(d) { state.page = Math.max(0, state.page + d); loadTableData(state.currentTable); }
+function changePage(d) {
+  state.page = Math.max(0, state.page + d);
+  // In search mode, just re-slice the cached dataset (no refetch needed).
+  if (state.search && state.search.trim() && state.searchAllRows) {
+    renderSearchPage(state.currentTable);
+  } else {
+    loadTableData(state.currentTable);
+  }
+}
+
+// ✅ FIXED: debounced GLOBAL search across ALL records (not just current page).
 function onSearch(v) {
   state.search = v;
-  renderTableHTML(TABLES[state.currentTable], state.tableData.filter(r => Object.values(r).some(x=>String(x).toLowerCase().includes(v.toLowerCase()))), state.currentTable);
+  state.page = 0;
+  clearTimeout(_searchDebounce);
+  _searchDebounce = setTimeout(() => {
+    if (state.search && state.search.trim()) {
+      loadSearchAll(state.currentTable);          // fetch-all + client filter/paginate
+    } else {
+      state.searchAllRows = null;                  // exit search mode
+      loadTableData(state.currentTable);           // back to server pagination
+    }
+  }, 300);
 }
-function onEmpFilter(v) { state.empFilter = v; state.page = 0; loadTableData(state.currentTable); }
+
+function onEmpFilter(v) {
+  state.empFilter = v;
+  state.page = 0;
+  state.searchAllRows = null;                       // emp filter changed → refetch dataset
+  if (state.search && state.search.trim()) {
+    loadSearchAll(state.currentTable);
+  } else {
+    loadTableData(state.currentTable);
+  }
+}
+
+// Refresh = drop any cached search dataset and reload from the server.
+function refreshTable(pageKey) {
+  state.searchAllRows = null;
+  loadTableData(pageKey);
+}
 
 // ─── BULK UPLOAD ─────────────────────────────────────────────────────────────
 function openBulkUpload(pageKey) {
@@ -817,8 +898,29 @@ function openBulkUpload(pageKey) {
   document.getElementById('modal-overlay').classList.add('open');
 }
 
+// Columns used for the employees bulk template (matches the Add Employee form)
+const EMP_BULK_COLS = [
+  'emp_id','emp_name','date_of_birth','gender','department','designation',
+  'date_of_joining','ctc','ctc_gmc_per_month','gmc_effective_date',
+  'gmc_inclusion_date','unit','email_id','mobile_number',
+];
+
 function downloadBulkTemplate(pageKey) {
   const tbl = TABLES[pageKey];
+
+  // ✅ Employees get a curated template (clean columns + sample row)
+  if (pageKey === 't_employees') {
+    const sample = [
+      'U3-1445','John Doe','1990-05-15','Male','Finance','Senior Analyst',
+      '2020-01-10','600000','2500','2020-01-10','2020-01-10','UNIT-3','john.doe@gcpl.com','9876543210',
+    ];
+    const ws = XLSX.utils.aoa_to_sheet([EMP_BULK_COLS, sample]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Template');
+    XLSX.writeFile(wb, `Employees_template.xlsx`);
+    return;
+  }
+
   const header = tbl.columns.filter(c => c !== tbl.key);
   const ws = XLSX.utils.aoa_to_sheet([header]);
   const wb = XLSX.utils.book_new();
@@ -835,16 +937,67 @@ async function handleBulkUpload(pageKey, file) {
   reader.onload = async (ev) => {
     const wb   = XLSX.read(ev.target.result, { type: 'binary' });
     const ws   = wb.Sheets[wb.SheetNames[0]];
-    const rows = XLSX.utils.sheet_to_json(ws);
+    let rows   = XLSX.utils.sheet_to_json(ws, { defval: '' });
 
     if (rows.length === 0) { status.textContent = '⚠️ No data rows found'; return; }
-    status.textContent = `⏳ Uploading ${rows.length} rows…`;
 
+    // ✅ Employees: validate + normalize each row before upload
+    if (pageKey === 't_employees') {
+      const errors = [];
+      const cleaned = [];
+      rows.forEach((raw, i) => {
+        const line = i + 2; // +1 header, +1 for 1-based
+        const r = {};
+        EMP_BULK_COLS.forEach(c => { r[c] = (raw[c] ?? '').toString().trim(); });
+
+        const gmc = parseFloat(r.ctc_gmc_per_month) || 0;
+        const doj = r.date_of_joining;
+
+        // required checks
+        ['emp_id','emp_name','date_of_birth','gender','department','designation','date_of_joining','unit','email_id','mobile_number']
+          .forEach(k => { if (!r[k]) errors.push(`Row ${line}: ${k} is required`); });
+        if (r.ctc === '' || isNaN(parseFloat(r.ctc))) errors.push(`Row ${line}: ctc is required (number)`);
+        if (r.email_id && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(r.email_id)) errors.push(`Row ${line}: invalid email`);
+        if (r.mobile_number && !/^\d{10}$/.test(r.mobile_number)) errors.push(`Row ${line}: mobile must be 10 digits`);
+        const genderNorm = r.gender.toLowerCase();
+        if (!['male','female'].includes(genderNorm)) errors.push(`Row ${line}: gender must be Male or Female`);
+        if (!EMP_UNITS.includes(r.unit)) errors.push(`Row ${line}: unit must be one of ${EMP_UNITS.join(', ')}`);
+
+        cleaned.push({
+          emp_id:             r.emp_id.toUpperCase(),
+          emp_name:           r.emp_name,
+          date_of_birth:      r.date_of_birth || null,
+          gender:             genderNorm === 'male' ? 'Male' : genderNorm === 'female' ? 'Female' : r.gender,
+          department:         r.department,
+          designation:        r.designation,
+          date_of_joining:    doj || null,
+          ctc:                r.ctc === '' ? null : parseFloat(r.ctc),
+          ctc_gmc_per_month:  gmc,
+          gmc_effective_date: r.gmc_effective_date || (gmc > 0 ? (doj || null) : null),
+          gmc_inclusion_date: r.gmc_inclusion_date || (gmc > 0 ? (doj || null) : null),
+          is_active:          true,
+          unit:               r.unit,
+          email_id:           r.email_id,
+          mobile_number:      r.mobile_number,
+        });
+      });
+
+      if (errors.length) {
+        status.innerHTML = `<div style="color:var(--danger);max-height:240px;overflow:auto">
+          <strong>❌ ${errors.length} validation error(s):</strong><br>${errors.slice(0,30).join('<br>')}
+          ${errors.length > 30 ? `<br>… and ${errors.length - 30} more` : ''}</div>`;
+        return;
+      }
+      rows = cleaned;
+    }
+
+    status.textContent = `⏳ Uploading ${rows.length} rows…`;
     try {
       // 🔒 Bulk insert via backend — server validates role & data
       const res = await tables.bulkInsert(TABLES[pageKey].name, rows);
       status.innerHTML = `<span style="color:var(--hr)">✅ Successfully imported ${res.inserted} records!</span>`;
       showToast(`Imported ${res.inserted} records!`, 'success');
+      state.searchAllRows = null;
       setTimeout(() => { closeModal(); loadTableData(pageKey); }, 1500);
     } catch(e) {
       status.innerHTML = `<span style="color:var(--danger)">❌ ${e.message}</span>`;
@@ -860,6 +1013,10 @@ let modalMode = 'insert', modalPageKey = '', modalRowData = null;
 function openInsertModal(pageKey) {
   modalMode = 'insert'; modalPageKey = pageKey; modalRowData = null;
   const tbl = TABLES[pageKey];
+
+  // ✅ Specialized form for the employees table (clean fields, validation, dropdowns)
+  if (pageKey === 't_employees') return openEmployeeModal('insert', null);
+
   document.getElementById('modal-title').textContent = `Add ${tbl.label}`;
   document.getElementById('modal-save-btn').style.display = '';
   document.getElementById('modal-save-btn').onclick = saveModal;
@@ -876,6 +1033,10 @@ function openInsertModal(pageKey) {
 function openEditModal(pageKey, row) {
   modalMode = 'edit'; modalPageKey = pageKey; modalRowData = row;
   const tbl = TABLES[pageKey];
+
+  // ✅ Specialized form for the employees table
+  if (pageKey === 't_employees') return openEmployeeModal('edit', row);
+
   document.getElementById('modal-title').textContent = `Edit ${tbl.label}`;
   document.getElementById('modal-save-btn').style.display = '';
   document.getElementById('modal-save-btn').onclick = saveModal;
@@ -887,6 +1048,185 @@ function openEditModal(pageKey, row) {
     </div>
   `).join('')}</div>`;
   document.getElementById('modal-overlay').classList.add('open');
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ─── SPECIALIZED EMPLOYEE FORM (Add / Edit) ──────────────────────────────────
+// Only the fields below are shown. Other DB columns (exit_date, exit_type, etc.)
+// are intentionally omitted from the form.
+// ═══════════════════════════════════════════════════════════════════════════════
+const EMP_UNITS = ['UNIT-3','UNIT-1','UNIT-2','UNIT-4','QUEST','GSPL','CORPORATE','OTHERS'];
+
+function openEmployeeModal(mode, row) {
+  modalMode = mode; modalPageKey = 't_employees'; modalRowData = row;
+  const r = row || {};
+  const isAdmin = state.role === 'admin';
+  const idReadonly = (mode === 'edit' && !isAdmin) ? 'readonly style="background:var(--surface2);cursor:not-allowed"' : '';
+  const val = (k) => escHtml(String(r[k] ?? ''));
+  const sel = (k, opt) => (String(r[k] ?? '') === opt ? 'selected' : '');
+
+  document.getElementById('modal-title').textContent = mode === 'insert' ? '➕ Add Employee' : `✏️ Edit Employee — ${val('emp_id')}`;
+  document.getElementById('modal-save-btn').style.display = '';
+  document.getElementById('modal-save-btn').onclick = saveEmployeeModal;
+
+  document.getElementById('modal-body').innerHTML = `
+    <div class="form-grid">
+      <div class="form-group">
+        <label>Employee ID *</label>
+        <input type="text" id="emp_f_emp_id" value="${val('emp_id')}" placeholder="e.g. U3-1445" ${idReadonly}>
+      </div>
+      <div class="form-group">
+        <label>Employee Name *</label>
+        <input type="text" id="emp_f_emp_name" value="${val('emp_name')}" placeholder="Full name">
+      </div>
+
+      <div class="form-group">
+        <label>Date of Birth * <span style="color:var(--text3);font-weight:400">(YYYY-MM-DD)</span></label>
+        <input type="date" id="emp_f_date_of_birth" value="${val('date_of_birth')}" max="2099-12-31">
+      </div>
+      <div class="form-group">
+        <label>Gender *</label>
+        <select id="emp_f_gender">
+          <option value="">Select…</option>
+          <option value="Male" ${sel('gender','Male')}>Male</option>
+          <option value="Female" ${sel('gender','Female')}>Female</option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label>Department *</label>
+        <input type="text" id="emp_f_department" value="${val('department')}" placeholder="e.g. Finance">
+      </div>
+      <div class="form-group">
+        <label>Designation *</label>
+        <input type="text" id="emp_f_designation" value="${val('designation')}" placeholder="e.g. Manager">
+      </div>
+
+      <div class="form-group">
+        <label>Date of Joining * <span style="color:var(--text3);font-weight:400">(YYYY-MM-DD)</span></label>
+        <input type="date" id="emp_f_date_of_joining" value="${val('date_of_joining')}" oninput="empRecalcGmcDates()">
+      </div>
+      <div class="form-group">
+        <label>Unit *</label>
+        <select id="emp_f_unit">
+          <option value="">Select…</option>
+          ${EMP_UNITS.map(u => `<option value="${u}" ${sel('unit',u)}>${u}</option>`).join('')}
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label>CTC (Annual) *</label>
+        <input type="number" id="emp_f_ctc" value="${val('ctc')}" min="0" step="0.01" placeholder="0">
+      </div>
+      <div class="form-group">
+        <label>CTC GMC / Month</label>
+        <input type="number" id="emp_f_ctc_gmc_per_month" value="${r.ctc_gmc_per_month ?? 0}" min="0" step="0.01" placeholder="0" oninput="empRecalcGmcDates()">
+        <small style="color:var(--text3)">Leave 0 if GMC not applicable</small>
+      </div>
+
+      <div class="form-group">
+        <label>GMC Effective Date <span style="color:var(--text3);font-weight:400">(auto = DOJ if GMC&gt;0)</span></label>
+        <input type="date" id="emp_f_gmc_effective_date" value="${val('gmc_effective_date')}">
+      </div>
+      <div class="form-group">
+        <label>GMC Inclusion Date <span style="color:var(--text3);font-weight:400">(auto = DOJ if GMC&gt;0)</span></label>
+        <input type="date" id="emp_f_gmc_inclusion_date" value="${val('gmc_inclusion_date')}">
+      </div>
+
+      <div class="form-group">
+        <label>Email ID *</label>
+        <input type="email" id="emp_f_email_id" value="${val('email_id')}" placeholder="name@example.com" oninput="empValidateEmail()">
+        <small id="emp_email_msg" style="color:var(--text3)"></small>
+      </div>
+      <div class="form-group">
+        <label>Mobile Number *</label>
+        <input type="tel" id="emp_f_mobile_number" value="${val('mobile_number')}" maxlength="10" placeholder="10 digits"
+          oninput="this.value=this.value.replace(/[^0-9]/g,'').slice(0,10)">
+        <small style="color:var(--text3)">10 digits only</small>
+      </div>
+    </div>
+  `;
+  document.getElementById('modal-overlay').classList.add('open');
+}
+
+// Auto-fill GMC dates from DOJ when CTC GMC > 0 (only if the field is empty,
+// so a manual override is never clobbered).
+function empRecalcGmcDates() {
+  const gmc = parseFloat(document.getElementById('emp_f_ctc_gmc_per_month')?.value) || 0;
+  const doj = document.getElementById('emp_f_date_of_joining')?.value || '';
+  const eff = document.getElementById('emp_f_gmc_effective_date');
+  const inc = document.getElementById('emp_f_gmc_inclusion_date');
+  if (gmc > 0 && doj) {
+    if (eff && !eff.value) eff.value = doj;
+    if (inc && !inc.value) inc.value = doj;
+  } else if (gmc <= 0) {
+    if (eff) eff.value = '';
+    if (inc) inc.value = '';
+  }
+}
+
+function empValidateEmail() {
+  const el  = document.getElementById('emp_f_email_id');
+  const msg = document.getElementById('emp_email_msg');
+  const v   = el.value.trim();
+  const ok  = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
+  if (!v) { msg.textContent = ''; return true; }
+  msg.textContent = ok ? '✅ Valid' : '❌ Invalid email format';
+  msg.style.color = ok ? 'var(--hr,#059669)' : 'var(--danger,#dc2626)';
+  return ok;
+}
+
+async function saveEmployeeModal() {
+  const g = (id) => document.getElementById(id)?.value ?? '';
+  const gmc = parseFloat(g('emp_f_ctc_gmc_per_month')) || 0;
+  const doj = g('emp_f_date_of_joining').trim();
+
+  const data = {
+    emp_id:             g('emp_f_emp_id').trim().toUpperCase(),
+    emp_name:           g('emp_f_emp_name').trim(),
+    date_of_birth:      g('emp_f_date_of_birth').trim() || null,
+    gender:             g('emp_f_gender'),
+    department:         g('emp_f_department').trim(),
+    designation:        g('emp_f_designation').trim(),
+    date_of_joining:    doj || null,
+    ctc:                g('emp_f_ctc') === '' ? null : parseFloat(g('emp_f_ctc')),
+    ctc_gmc_per_month:  gmc,
+    gmc_effective_date: g('emp_f_gmc_effective_date').trim() || (gmc > 0 ? (doj || null) : null),
+    gmc_inclusion_date: g('emp_f_gmc_inclusion_date').trim() || (gmc > 0 ? (doj || null) : null),
+    is_active:          true,                       // always active by default
+    unit:               g('emp_f_unit'),
+    email_id:           g('emp_f_email_id').trim(),
+    mobile_number:      g('emp_f_mobile_number').trim(),
+  };
+
+  // ── Validation ──
+  const required = {
+    emp_id: 'Employee ID', emp_name: 'Employee Name', date_of_birth: 'Date of Birth',
+    gender: 'Gender', department: 'Department', designation: 'Designation',
+    date_of_joining: 'Date of Joining', unit: 'Unit', email_id: 'Email ID', mobile_number: 'Mobile Number',
+  };
+  for (const [k, label] of Object.entries(required)) {
+    if (!data[k]) { showToast(`${label} is required`, 'error'); return; }
+  }
+  if (data.ctc === null || isNaN(data.ctc)) { showToast('CTC is required', 'error'); return; }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(data.email_id)) { showToast('Invalid email format', 'error'); return; }
+  if (!/^\d{10}$/.test(data.mobile_number)) { showToast('Mobile number must be exactly 10 digits', 'error'); return; }
+  if (!EMP_UNITS.includes(data.unit)) { showToast('Please select a valid Unit', 'error'); return; }
+
+  try {
+    if (modalMode === 'insert') {
+      await tables.insert('employees', data);
+    } else {
+      const keyVal = modalRowData[TABLES.t_employees.key]; // 'id'
+      await tables.update('employees', keyVal, data, TABLES.t_employees.key);
+    }
+    showToast(modalMode === 'insert' ? 'Employee added!' : 'Employee updated!', 'success');
+    closeModal();
+    state.searchAllRows = null;          // invalidate search cache
+    loadTableData('t_employees');
+  } catch(e) {
+    showToast(e.message, 'error');
+  }
 }
 
 function closeModal() {
@@ -1698,10 +2038,14 @@ window.navigate          = _origNavigate; // will be overridden below
 window.onSearch          = onSearch;
 window.onEmpFilter       = onEmpFilter;
 window.changePage        = changePage;
+window.refreshTable      = refreshTable;
 window.openInsertModal   = openInsertModal;
 window.openEditModal     = openEditModal;
 window.closeModal        = closeModal;
 window.saveModal         = saveModal;
+window.saveEmployeeModal = saveEmployeeModal;
+window.empRecalcGmcDates = empRecalcGmcDates;
+window.empValidateEmail  = empValidateEmail;
 window.deleteRow         = deleteRow;
 window.openBulkUpload    = openBulkUpload;
 window.downloadBulkTemplate = downloadBulkTemplate;
@@ -3489,10 +3833,10 @@ function renderTableHTML(tbl, rows, pageKey) {
         </table>
       </div>
       <div class="pagination">
-        <span>Page ${state.page + 1} of ${totalPages||1} · <strong>${rows.length}</strong> rows shown · ${state.totalCount} total</span>
+        <span>Page ${state.page + 1} of ${totalPages||1} · <strong>${rows.length}</strong> rows shown · ${state.totalCount} total${(state.search&&state.search.trim())?' <span style="color:var(--text3)">(filtered)</span>':''}</span>
         <div class="pagination-btns">
           <button onclick="changePage(-1)" ${state.page===0?'disabled':''}>← Prev</button>
-          <button onclick="changePage(1)"  ${rows.length < state.pageSize?'disabled':''}>Next →</button>
+          <button onclick="changePage(1)"  ${state.page + 1 >= (totalPages||1)?'disabled':''}>Next →</button>
         </div>
       </div>
     </div>
@@ -4523,7 +4867,7 @@ window.downloadFFPDF         = downloadFFPDF;
 // ─── Patch navigate() to include ff_statement ────────────────────────────────
 function navigate(page) {
   state.currentPage = page;
-  state.page = 0; state.search = ''; state.empFilter = '';
+  state.page = 0; state.search = ''; state.empFilter = ''; state.searchAllRows = null;
 
   document.querySelectorAll('.sidebar-item').forEach(el => {
     el.classList.toggle('active', el.dataset.page === page);

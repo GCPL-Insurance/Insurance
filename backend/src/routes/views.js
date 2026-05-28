@@ -133,7 +133,7 @@ router.get('/employee-full/:empId', async (req, res) => {
 router.get('/:viewName', async (req, res) => {
   const { viewName } = req.params;
   const { role, emp_id } = req.user;
-  const { emp_filter, page, pageSize } = req.query;
+  const { emp_filter, page, pageSize, all } = req.query;
 
   const meta = VIEW_META[viewName];
   if (!meta) return res.status(404).json({ error: 'View not found' });
@@ -146,6 +146,11 @@ router.get('/:viewName', async (req, res) => {
   const ps = Math.min(500, Math.max(1, parseInt(pageSize) || 100));
   const offset = pg * ps;
 
+  // ✅ SEARCH-ALL MODE: ?all=1 returns the full view (up to cap) so the frontend
+  // can search across every row, not just the current page.
+  const fetchAll = all === '1' || all === 'true';
+  const ALL_CAP = 5000;
+
   let q = supabase.from(viewName).select('*', { count: 'exact' });
 
   if (role === 'employee' && meta.empFilter) {
@@ -154,11 +159,11 @@ router.get('/:viewName', async (req, res) => {
     q = q.eq('emp_id', emp_filter.trim().toUpperCase());
   }
 
-  q = q.range(offset, offset + ps - 1);
+  q = fetchAll ? q.range(0, ALL_CAP - 1) : q.range(offset, offset + ps - 1);
 
   const { data, error, count } = await q;
   if (error) return res.status(400).json({ error: error.message });
-  res.json({ data, count, page: pg, pageSize: ps });
+  res.json({ data, count, page: fetchAll ? 0 : pg, pageSize: fetchAll ? (data?.length || 0) : ps, all: fetchAll });
 });
 
 export default router;

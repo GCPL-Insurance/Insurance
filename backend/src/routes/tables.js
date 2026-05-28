@@ -74,13 +74,20 @@ function parsePagination(page, pageSize) {
 router.get('/:table', async (req, res) => {
   const { table } = req.params;
   const { role, emp_id } = req.user;
-  const { page, pageSize, emp_filter } = req.query;
+  const { page, pageSize, emp_filter, all } = req.query;
 
   if (!checkAccess(table, 'read', role)) {
     return res.status(403).json({ error: 'Access denied to this table' });
   }
 
   const { page: pg, pageSize: ps, offset } = parsePagination(page, pageSize);
+
+  // ✅ SEARCH-ALL MODE: when ?all=1 is passed, return the full dataset (up to a
+  // safe cap) so the frontend can search across EVERY record, not just one page.
+  // This fixes the bug where searching (e.g. blood group "O+") only matched rows
+  // on the currently visible page.
+  const fetchAll = all === '1' || all === 'true';
+  const ALL_CAP = 5000; // hard upper bound to protect the server
 
   let q = supabase.from(table).select('*', { count: 'exact' });
 
@@ -96,11 +103,11 @@ router.get('/:table', async (req, res) => {
     q = q.eq(col, searchVal);
   }
 
-  q = q.range(offset, offset + ps - 1);
+  q = fetchAll ? q.range(0, ALL_CAP - 1) : q.range(offset, offset + ps - 1);
 
   const { data, error, count } = await q;
   if (error) return res.status(400).json({ error: error.message });
-  res.json({ data, count, page: pg, pageSize: ps });
+  res.json({ data, count, page: fetchAll ? 0 : pg, pageSize: fetchAll ? (data?.length || 0) : ps, all: fetchAll });
 });
 
 // ─── POST /api/data/:table — single insert ────────────────────────────────────
