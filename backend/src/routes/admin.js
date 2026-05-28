@@ -4,8 +4,6 @@ import { supabase } from '../index.js';
 const router = Router();
 
 // ─── Role guard helper ────────────────────────────────────────────────────────
-// /api/admin is accessible to both admin and hr (for enrollment review).
-// User management routes below require the stricter admin-only check.
 function requireAdmin(req, res, next) {
   if (req.user?.role !== 'admin') {
     return res.status(403).json({ error: 'Access denied. Admin role required.' });
@@ -35,7 +33,6 @@ router.post('/users', requireAdmin, async (req, res) => {
 
   email = email.trim().toLowerCase();
 
-  // FIX: Validate role strictly
   const normRole = (role || '').trim().toLowerCase();
   if (!VALID_ROLES.includes(normRole))
     return res.status(400).json({ error: `Invalid role. Must be one of: ${VALID_ROLES.join(', ')}` });
@@ -50,22 +47,18 @@ router.post('/users', requireAdmin, async (req, res) => {
     } else if (normRole === 'employee') {
       return res.status(400).json({ error: `Employee ID "${emp_id}" not found in employees table` });
     }
-    // For admin/hr: proceed even if not in employees table
   }
 
-  // Check email not already in use
   const { data: existEmail } = await supabase
     .from('user_profiles').select('id').eq('email', email).single();
   if (existEmail) return res.status(409).json({ error: 'A user with this email already exists' });
 
-  // Check emp_id not already linked
   if (emp_id) {
     const { data: existEmp } = await supabase
       .from('user_profiles').select('id').eq('emp_id', emp_id).single();
     if (existEmp) return res.status(409).json({ error: `Employee ID ${emp_id} already has an account` });
   }
 
-  // Create auth user via admin API
   const { data: authData, error: authErr } = await supabase.auth.admin.createUser({
     email,
     password,
@@ -73,7 +66,6 @@ router.post('/users', requireAdmin, async (req, res) => {
     user_metadata: { full_name, emp_id: emp_id || null, role: normRole },
   });
   if (authErr) {
-    // Log raw error for debugging on Render
     console.error('[admin/users POST] auth.admin.createUser error:', JSON.stringify({
       status: authErr.status,
       message: authErr.message,
@@ -119,7 +111,6 @@ router.patch('/users/:userId', requireAdmin, async (req, res) => {
   const { userId } = req.params;
   const { role, emp_id, is_active, full_name } = req.body;
 
-  // FIX: Validate role if being updated
   if (role !== undefined) {
     const normRole = (role || '').trim().toLowerCase();
     if (!VALID_ROLES.includes(normRole)) {
@@ -127,7 +118,6 @@ router.patch('/users/:userId', requireAdmin, async (req, res) => {
     }
   }
 
-  // Prevent admin from deactivating their own account
   if (is_active === false && userId === req.user.id) {
     return res.status(400).json({ error: 'You cannot deactivate your own account' });
   }
@@ -140,7 +130,6 @@ router.patch('/users/:userId', requireAdmin, async (req, res) => {
   updates.updated_at = new Date().toISOString();
 
   if (Object.keys(updates).length === 1) {
-    // only updated_at — nothing to actually update
     return res.status(400).json({ error: 'No valid fields provided to update' });
   }
 
@@ -153,7 +142,6 @@ router.patch('/users/:userId', requireAdmin, async (req, res) => {
 router.delete('/users/:userId', requireAdmin, async (req, res) => {
   const { userId } = req.params;
 
-  // Prevent self-deletion
   if (userId === req.user.id) {
     return res.status(400).json({ error: 'You cannot delete your own account' });
   }
@@ -179,7 +167,6 @@ router.post('/users/:userId/reset-password', requireAdmin, async (req, res) => {
 router.get('/enrollments', async (req, res) => {
   const { status } = req.query;
 
-  // FIX: Validate status value to prevent injection
   const VALID_STATUSES = ['ALL', 'DRAFT', 'SUBMITTED', 'APPROVED', 'REJECTED'];
   if (status && !VALID_STATUSES.includes(status)) {
     return res.status(400).json({ error: `Invalid status. Must be one of: ${VALID_STATUSES.join(', ')}` });
@@ -196,7 +183,6 @@ router.get('/enrollments', async (req, res) => {
   const { data, error } = await query;
   if (error) return res.status(400).json({ error: error.message });
 
-  // Attach summaries + live CTC GMC totals from view
   const enrollmentIds = (data || []).map(e => e.enrollment_id).filter(Boolean);
   const empIds        = (data || []).map(e => e.emp_id).filter(Boolean);
 
@@ -223,7 +209,6 @@ router.get('/enrollments', async (req, res) => {
       const saved   = summaryMap[e.enrollment_id] || null;
       const liveCtc = liveTotalMap[e.emp_id] ?? null;
       if (!saved) return { ...e, summary: null };
-      // Recalculate deduction/refund using live ctc when available
       const ctc      = liveCtc ?? Number(saved.total_ctc_gmc_available || 0);
       const premium  = Number(saved.total_insurer_premium || 0);
       return {
@@ -255,9 +240,6 @@ router.get('/enrollments/:id', async (req, res) => {
 
   const empId = enrollRes.data.emp_id;
 
-  // ── Always fetch live CTC GMC total from view — this is the authoritative value.
-  // The saved summary.total_ctc_gmc_available may be stale (calculated at submission
-  // time using DOJ fallback before gmc_effective_date was populated).
   const { data: ctcTotalRow } = await supabase
     .from('vw_employee_ctc_gmc_total')
     .select('total_ctc_gmc')
@@ -265,14 +247,10 @@ router.get('/enrollments/:id', async (req, res) => {
     .single();
   const liveTotalCtcGmc = ctcTotalRow?.total_ctc_gmc ?? null;
 
-  // ── Merge: override saved summary's ctc field with live view value.
-  // If the live view has a value, it always wins over the stale saved summary.
   const savedSummary = summaryRes.data || null;
   const mergedSummary = savedSummary ? {
     ...savedSummary,
-    // Override stale ctc with live view value
     total_ctc_gmc_available: liveTotalCtcGmc ?? savedSummary.total_ctc_gmc_available,
-    // Recalculate deduction/refund against live ctc
     ...(liveTotalCtcGmc != null ? (() => {
       const premium  = Number(savedSummary.total_insurer_premium || 0);
       const ctc      = Number(liveTotalCtcGmc);
@@ -283,7 +261,6 @@ router.get('/enrollments/:id', async (req, res) => {
     })() : {}),
     _ctc_source: liveTotalCtcGmc != null ? 'live_view' : 'saved_summary',
   } : (liveTotalCtcGmc != null ? {
-    // No saved summary at all but view has a value — build minimal summary
     total_ctc_gmc_available: liveTotalCtcGmc,
     _ctc_source: 'live_view',
   } : null);
@@ -293,11 +270,12 @@ router.get('/enrollments/:id', async (req, res) => {
     insured_members: membersRes.data || [],
     summary: mergedSummary,
     audit: auditRes.data || [],
-    live_ctc_gmc_total: liveTotalCtcGmc,  // exposed separately for transparency
+    live_ctc_gmc_total: liveTotalCtcGmc,
   });
 });
 
 // ─── PATCH /api/admin/enrollments/:id — approve / reject / correction ─────────
+// ✅ FIXED: Proper error handling with try/catch, separated from audit insert
 router.patch('/enrollments/:id', async (req, res) => {
   const id = parseInt(req.params.id);
   if (isNaN(id)) return res.status(400).json({ error: 'Invalid enrollment ID' });
@@ -306,8 +284,6 @@ router.patch('/enrollments/:id', async (req, res) => {
   if (!['APPROVED', 'REJECTED', 'CORRECTION_REQUIRED'].includes(action))
     return res.status(400).json({ error: 'Invalid action. Must be APPROVED, REJECTED, or CORRECTION_REQUIRED' });
 
-  // ── 25s server-side timeout guard ─────────────────────────────────────────
-  // Prevents Render.com from sending an HTML 502 when Supabase is slow.
   let responded = false;
   const timeoutId = setTimeout(() => {
     if (!responded) {
@@ -336,27 +312,51 @@ router.patch('/enrollments/:id', async (req, res) => {
       ...(action === 'APPROVED' ? { locked_at: now, locked_by: reviewerName } : {}),
     };
 
-    const { error } = await supabase.from('employee_gmc_enrollment').update(updates).eq('enrollment_id', id);
-    if (error) return send(400, { error: error.message });
+    // Main update - use proper error handling
+    const { error: updateError } = await supabase
+      .from('employee_gmc_enrollment')
+      .update(updates)
+      .eq('enrollment_id', id);
+    
+    if (updateError) {
+      return send(400, { error: updateError.message });
+    }
 
-    const { data: enroll } = await supabase
-      .from('employee_gmc_enrollment').select('emp_id').eq('enrollment_id', id).single();
+    // Get enrollment data for audit
+    const { data: enroll, error: fetchError } = await supabase
+      .from('employee_gmc_enrollment')
+      .select('emp_id')
+      .eq('enrollment_id', id)
+      .single();
 
-    // Audit log (non-fatal)
-    await supabase.from('employee_gmc_enrollment_audit').insert({
-      enrollment_id: id,
-      emp_id: enroll?.emp_id,
-      action,
-      action_by: reviewerName,
-      remarks: admin_remarks?.trim() || null,
-      created_at: now,
-    }).catch(e => console.warn('[admin/enrollments PATCH] audit failed:', e.message));
+    if (fetchError) {
+      console.warn('[admin/enrollments PATCH] fetch for audit failed:', fetchError.message);
+    }
+
+    // ✅ FIX: Proper async error handling - use try/catch or separate await, not chained .catch()
+    if (enroll?.emp_id) {
+      try {
+        await supabase.from('employee_gmc_enrollment_audit').insert({
+          enrollment_id: id,
+          emp_id: enroll.emp_id,
+          action,
+          action_by: reviewerName,
+          remarks: admin_remarks?.trim() || null,
+          created_at: now,
+        });
+      } catch (auditErr) {
+        console.warn('[admin/enrollments PATCH] audit insert failed:', auditErr.message);
+      }
+    }
 
     // Fire confirmation email if approved (non-blocking)
     if (action === 'APPROVED' && process.env.SUPABASE_URL) {
       fetch(`${process.env.SUPABASE_URL}/functions/v1/enrollment-confirmation`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}` },
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`
+        },
         body: JSON.stringify({ enrollment_id: id, secret: process.env.FUNCTION_SECRET || '' }),
       }).catch(e => console.warn('[admin/enrollments PATCH] email failed:', e.message));
     }
