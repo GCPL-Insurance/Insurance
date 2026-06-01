@@ -140,6 +140,7 @@ import viewRoutes      from './routes/views.js';
 import exportRoutes    from './routes/export.js';
 import adminRoutes     from './routes/admin.js';
 import onboardingRoutes from './routes/onboarding.js';
+import renewalRoutes   from './routes/renewal.js';
 
 // authLimiter is now applied per-route inside auth.js (login/signup only).
 // Enrollment routes (/api/auth/enrollment, /api/auth/enrollment-data) are
@@ -149,6 +150,7 @@ app.use('/api/onboarding', onboardingRoutes);
 app.use('/api/data',       requireAuth, tableRoutes);
 app.use('/api/views',      requireAuth, viewRoutes);
 app.use('/api/export',     requireAuth, exportRoutes);
+app.use('/api/renewal',    requireAuth, renewalRoutes);
 // Admin-only routes: user management, rate card config, etc.
 // Enrollment review is accessible to both admin AND hr — see onboarding.js for hr-specific routes.
 // NOTE: requireRole('admin','hr') on /api/admin gives HR read + enrollment access but

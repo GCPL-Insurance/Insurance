@@ -275,3 +275,23 @@ export const adminEnrollment = {
   review: (id, action, admin_remarks) =>
     apiFetch(`/admin/enrollments/${id}`, { method: 'PATCH', body: JSON.stringify({ action, admin_remarks }) }),
 };
+
+// ─── GMC Renewal 2026-27 ──────────────────────────────────────────────────────
+export const renewal = {
+  eligibility: (emp_id) => {
+    const qs = emp_id ? `?emp_id=${encodeURIComponent(emp_id)}` : '';
+    return apiFetch(`/renewal/eligibility${qs}`);
+  },
+  dependents: (empId) => apiFetch(`/renewal/dependents/${empId}`),
+  editDependent:    (id, body)         => apiFetch(`/renewal/dependents/${id}`,        { method: 'PATCH', body: JSON.stringify(body) }),
+  deleteDependent:  (id, reason)       => apiFetch(`/renewal/dependents/${id}/delete`, { method: 'POST',  body: JSON.stringify({ reason }) }),
+  restoreDependent: (id)               => apiFetch(`/renewal/dependents/${id}/restore`,{ method: 'POST' }),
+  quote:  (body) => apiFetch('/renewal/quote',  { method: 'POST', body: JSON.stringify(body) }),
+  submit: (body) => apiFetch('/renewal/submit', { method: 'POST', body: JSON.stringify(body) }),
+  trackLogin: () => apiFetch('/renewal/_track-login', { method: 'POST' }).catch(() => null),
+  admin: {
+    progress: ()            => apiFetch('/renewal/admin/progress'),
+    remind:   (empId)       => apiFetch(`/renewal/admin/remind/${empId}`, { method: 'POST' }),
+    pause:    (empId, paused) => apiFetch(`/renewal/admin/pause/${empId}`, { method: 'POST', body: JSON.stringify({ paused }) }),
+  },
+};

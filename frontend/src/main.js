@@ -3,7 +3,7 @@ import { jsPDF } from 'jspdf';
 import 'jspdf-autotable';
 import './style.css';
 // ✅ All data goes through our Express backend. Zero direct Supabase calls here.
-import { auth, tables, views, admin, apiFetch, enrollment, adminEnrollment } from './lib/api.js';
+import { auth, tables, views, admin, apiFetch, enrollment, adminEnrollment, tokenStore, renewal } from './lib/api.js';
 
 // ─── STATE ─────────────────────────────────────────────────────────────────────
 let state = {
@@ -274,6 +274,11 @@ async function doLogin() {
       btn.disabled = false; btn.textContent = 'Sign In';
       showForceChangePanel();
       return;
+    }
+
+    // Track login for renewal monitor (employees only, fire-and-forget)
+    if (state.role === 'employee' && state.empId) {
+      renewal.trackLogin().catch(() => null);
     }
 
     initApp();
@@ -3871,11 +3876,36 @@ async function renderEmployeeDashboardV2() {
 
   const data   = result?.data || {};
   const emp    = data.employees?.[0];
-  // All data from employees table — employee_onboarding is no longer used
-  const deps   = data.insurance_dependents || [];
-  const enroll = data.employee_gmc_enrollment?.[0];
+  // ✅ BUG FIX: Insured Members shown on the dashboard must come from the latest
+  // SUBMITTED or APPROVED GMC enrollment (employee_gmc_enrollment_insured), not the
+  // raw insurance_dependents table. The old code only saw the employee themself.
+  const allEnrolls = data.employee_gmc_enrollment || [];
+  // pick latest non-DRAFT enrollment (prefer APPROVED > SUBMITTED, then newest)
+  const enroll = allEnrolls
+    .slice()
+    .sort((a, b) => {
+      const rank = (s) => s === 'APPROVED' ? 3 : s === 'SUBMITTED' ? 2 : s === 'REJECTED' ? 1 : 0;
+      const r = rank(b.enrollment_status) - rank(a.enrollment_status);
+      if (r !== 0) return r;
+      return new Date(b.updated_at || b.submitted_at || 0) - new Date(a.updated_at || a.submitted_at || 0);
+    })[0] || allEnrolls[0];
+
+  // Insured members for THIS enrollment
+  const insuredAll = data.employee_gmc_enrollment_insured || [];
+  const insuredMembers = enroll
+    ? insuredAll.filter(m => m.enrollment_id === enroll.enrollment_id)
+    : [];
+  // Fallback raw dependents (only used as a secondary list if no submitted enrollment)
+  const rawDeps  = data.insurance_dependents || [];
   const claims = data.employee_gmc_claims || [];
   const fins   = data.employee_gmc_financials_25_26?.[0];
+
+  // For the "Insured Dependents" panel we show insured members from the submitted
+  // enrollment if it exists; otherwise we fall back to the raw dependents list.
+  const deps = insuredMembers.length ? insuredMembers : rawDeps;
+  const memberCount = enroll
+    ? insuredMembers.length                            // submitted enrollment → exact count incl. self
+    : (rawDeps.length + 1);                            // no enrollment → self + dependents on file
 
   // ctc_gmc_per_month comes exclusively from employees table
   const ctcGmcVal = emp?.ctc_gmc_per_month ?? null;
@@ -3912,8 +3942,8 @@ async function renderEmployeeDashboardV2() {
       <div class="stat-card green">
         <div class="stat-icon">👨‍👩‍👧</div>
         <div class="stat-label">Insured Members</div>
-        <div class="stat-value">${deps.length + 1}</div>
-        <div class="stat-sub">Self + ${deps.length} dependent(s)</div>
+        <div class="stat-value">${memberCount}</div>
+        <div class="stat-sub">${enroll ? `From ${enroll.enrollment_status} enrollment` : `Self + ${rawDeps.length} dependent(s)`}</div>
       </div>
       <div class="stat-card purple">
         <div class="stat-icon">🏨</div>
@@ -3979,19 +4009,23 @@ async function renderEmployeeDashboardV2() {
     </div>
 
     <!-- Dependents -->
-    <div style="font-size:15px;font-weight:700;margin-bottom:12px;color:#0f172a">👨‍👩‍👧 Insured Dependents</div>
+    <div style="font-size:15px;font-weight:700;margin-bottom:12px;color:#0f172a">👨‍👩‍👧 Insured Members ${enroll ? `<span style="font-size:11px;font-weight:500;color:var(--text3)">· from ${enroll.enrollment_status} enrollment</span>` : ''}</div>
     ${deps.length === 0
-      ? '<div class="empty-state" style="padding:20px;border-radius:14px;background:white;border:1px solid var(--border);margin-bottom:20px"><div class="icon">📭</div>No dependents on record</div>'
+      ? '<div class="empty-state" style="padding:20px;border-radius:14px;background:white;border:1px solid var(--border);margin-bottom:20px"><div class="icon">📭</div>No insured members on record. Complete your GMC enrollment to add members.</div>'
       : `<div class="dep-cards-grid" style="margin-bottom:20px">
         ${deps.map(d => {
-          const relIcons = { Spouse:'💑', Son:'👦', Daughter:'👧', Father:'👨', Mother:'👩', 'Father-in-Law':'👴', 'Mother-in-Law':'👵' };
+          const relIcons = { Self:'👤', Spouse:'💑', Son:'👦', Daughter:'👧', Father:'👨', Mother:'👩', 'Father-in-Law':'👴', 'Mother-in-Law':'👵' };
+          const hasStatus = 'status' in d;  // insurance_dependents has it; enrollment_insured doesn't
           return `<div class="dep-card">
             <div class="dep-icon">${relIcons[d.relationship]||'👤'}</div>
             <div>
               <div class="dep-name">${d.insured_name||'—'}</div>
               <div class="dep-meta">${d.relationship||''} · DOB: ${fmtDate(d.date_of_birth)}</div>
               <div class="dep-meta">Sum Insured: ${fmtCurr(d.sum_insured)}</div>
-              <div style="margin-top:6px"><span class="badge ${d.status==='A'?'badge-green':'badge-red'}">${d.status==='A'?'Active':'Inactive'}</span></div>
+              ${d.annual_premium ? `<div class="dep-meta">Annual Premium: ${fmtCurr(d.annual_premium)}</div>` : ''}
+              <div style="margin-top:6px">${hasStatus
+                ? `<span class="badge ${d.status==='A'?'badge-green':'badge-red'}">${d.status==='A'?'Active':'Inactive'}</span>`
+                : `<span class="badge badge-green">Covered</span>`}</div>
             </div>
           </div>`;
         }).join('')}
@@ -4878,6 +4912,8 @@ function navigate(page) {
     views: 'Database Views', emp_full_view: 'Employee Full View',
     user_management: 'User Management', concerns: 'Correction Concerns',
     ff_statement: 'F&F GMC Statement',
+    gmc_renewal: 'GMC Renewal 2026-27',
+    admin_renewal_progress: 'Renewal Progress 2026-27',
     ...Object.fromEntries(Object.entries(TABLES).map(([k,v]) => [k, v.label])),
   };
   document.getElementById('topbar-section').textContent = titles[page] || page;
@@ -4894,6 +4930,8 @@ async function renderPageV2(page) {
   if (page === 'gmc_enrollment_form'){ await renderEnrollmentForm(); return; }
   if (page === 'admin_enrollments')  { await renderAdminEnrollments(); return; }
   if (page === 'ff_statement')       { await renderFFStatementPage(); return; }
+  if (page === 'gmc_renewal')             { await renderRenewalPage(); return; }
+  if (page === 'admin_renewal_progress')  { await renderAdminRenewalProgress(); return; }
   if (TABLES[page])                  { await renderTable(page); return; }
 }
 
@@ -4947,3 +4985,669 @@ function initApp() {
   navigate(homePage);
 }
 window.initApp = initApp;
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ─── GMC RENEWAL 2026-27 — Employee renewal flow ─────────────────────────────
+// 3-step wizard. Page 3 has Sum Insured selection ON TOP and Dependents BELOW.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const renewalState = {
+  step: 1,                       // 1, 2, 3
+  termsAccepted: false,
+  eligibility: null,
+  dependents: [],
+  selectedSI: null,
+  quote: null,
+  submitting: false,
+};
+
+function rFmt(v) {
+  if (v == null || isNaN(Number(v))) return '—';
+  return '₹' + Math.round(Number(v)).toLocaleString('en-IN');
+}
+function rFmtDate(s) {
+  if (!s) return '—';
+  try { const d = new Date(s); return d.toLocaleDateString('en-IN'); } catch { return s; }
+}
+
+async function renderRenewalPage() {
+  const c = document.getElementById('content');
+  c.innerHTML = `<div class="loading"><div class="spinner"></div> Loading renewal…</div>`;
+
+  let elig;
+  try { elig = await renewal.eligibility(); }
+  catch (e) { c.innerHTML = `<div class="empty-state"><div class="icon">⚠️</div>${e.message}</div>`; return; }
+
+  renewalState.eligibility = elig;
+
+  if (!elig.eligible) {
+    const reason = elig.reason === 'NO_GMC_INCLUSION_DATE'
+      ? 'GMC inclusion date is not set on your record.'
+      : elig.reason === 'INACTIVE' ? 'Your record is marked inactive.'
+      : 'You are not currently eligible for this renewal cycle.';
+    c.innerHTML = `<div class="empty-state">
+      <div class="icon">🚫</div>
+      <b>Not eligible for GMC Renewal 2026-27</b><br>
+      <div style="margin-top:8px;color:var(--text2)">${reason}</div>
+      <div style="margin-top:12px;font-size:13px">If you believe this is an error, please contact HR.</div>
+    </div>`;
+    return;
+  }
+
+  // Already submitted? Show confirmation screen.
+  if (elig.existing_renewal) {
+    return renderRenewalAlreadySubmitted(elig);
+  }
+
+  // Window closed?
+  if (!elig.window.is_open && state.role === 'employee') {
+    const open = new Date(elig.window.open_at);
+    const close = new Date(elig.window.close_at);
+    const isFuture = new Date() < open;
+    c.innerHTML = `<div class="empty-state">
+      <div class="icon">${isFuture ? '⏳' : '🔒'}</div>
+      <b>Renewal window ${isFuture ? 'has not opened yet' : 'has closed'}</b><br>
+      <div style="margin-top:8px;color:var(--text2)">
+        Window: ${open.toLocaleDateString('en-IN')} — ${close.toLocaleDateString('en-IN')}
+      </div>
+    </div>`;
+    return;
+  }
+
+  // Load dependents
+  try {
+    const dRes = await renewal.dependents(elig.employee.emp_id);
+    renewalState.dependents = dRes.data || [];
+  } catch (e) {
+    renewalState.dependents = [];
+    console.warn('[renewal] dependents fetch failed:', e.message);
+  }
+
+  // Default SI = first available (= current SI, since lower options are filtered out)
+  if (!renewalState.selectedSI) {
+    renewalState.selectedSI = elig.current_sum_insured;
+  }
+
+  renderRenewalStep();
+}
+
+function renderRenewalStep() {
+  const c = document.getElementById('content');
+  const step = renewalState.step;
+  c.innerHTML = `
+    <div style="max-width:980px;margin:0 auto">
+      ${renderRenewalStepper(step)}
+      ${step === 1 ? renderRenewalStep1() : ''}
+      ${step === 2 ? renderRenewalStep2() : ''}
+      ${step === 3 ? renderRenewalStep3() : ''}
+    </div>
+  `;
+
+  if (step === 3) {
+    // Compute quote on render
+    refreshRenewalQuote();
+  }
+}
+
+function renderRenewalStepper(step) {
+  const steps = [
+    { n: 1, label: 'Terms & Conditions' },
+    { n: 2, label: 'Verify Your Details' },
+    { n: 3, label: 'Sum Insured · Dependents · Summary' },
+  ];
+  return `
+    <div style="display:flex;gap:8px;margin-bottom:20px;flex-wrap:wrap">
+      ${steps.map(s => `
+        <div style="flex:1;min-width:180px;padding:12px;border-radius:10px;border:1px solid var(--border);
+                    background:${s.n === step ? '#dbeafe' : s.n < step ? '#dcfce7' : 'white'};
+                    color:${s.n === step ? '#1e40af' : s.n < step ? '#15803d' : 'var(--text2)'};font-size:13px">
+          <div style="font-weight:700">${s.n < step ? '✅' : s.n === step ? '➜' : '○'} Step ${s.n}</div>
+          <div>${s.label}</div>
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
+// ─── Step 1: Terms & Conditions ─────────────────────────────────────────────
+function renderRenewalStep1() {
+  return `
+    <div style="background:white;border:1px solid var(--border);border-radius:14px;padding:24px">
+      <h2 style="margin:0 0 12px 0">📋 GMC Renewal 2026-27 — Terms & Conditions</h2>
+      <div style="background:#fef3c7;border-left:4px solid #f59e0b;padding:12px;border-radius:8px;margin-bottom:16px;font-size:13px">
+        <b>Renewal Window:</b> 1 July 2026 — 15 July 2026. Submission to insurer on 16 July 2026.
+      </div>
+      <div style="font-size:14px;line-height:1.7;color:var(--text2);max-height:340px;overflow-y:auto;
+                   padding:16px;background:var(--surface2);border-radius:10px">
+        <ol style="padding-left:18px">
+          <li><b>Coverage period:</b> 1 August 2026 to 31 July 2027 (subject to insurer confirmation).</li>
+          <li><b>No new dependents can be added.</b> Per policy rules, only existing dependents may continue. You may DELETE a dependent with a reason (expired / not continuing). <b>Once deleted, the dependent cannot be re-added in future renewals.</b></li>
+          <li>You may correct typos in dependent <b>name, date of birth, and gender</b>. The <b>relation</b> field is locked.</li>
+          <li><b>Sum Insured</b> can be increased or kept the same. <b>It cannot be decreased.</b></li>
+          <li>Premium displayed is approximate and may vary <b>±10%</b> based on the insurer's final policy booking.</li>
+          <li>If 26-27 premium exceeds your available CTC GMC + 25-26 closing balance, the shortfall will be recovered as a 6-month salary deduction starting <b>September 2026</b>.</li>
+          <li>25-26 closing balance (excess over premium) will be refunded in <b>September 2026</b>, considering the 26-27 premium.</li>
+          <li>26-27 closing balance will be settled in <b>September 2027</b> (subject to 2027-28 increment and enrollment).</li>
+          <li>All details submitted are deemed correct on submission. Corrections after submission require an HR endorsement.</li>
+          <li>By submitting, you authorise GCPL to share your details and dependents' details with the insurer for policy issuance.</li>
+        </ol>
+      </div>
+      <div style="margin-top:16px;display:flex;align-items:center;gap:10px;font-size:14px">
+        <input type="checkbox" id="renewal-terms-cb" ${renewalState.termsAccepted ? 'checked' : ''}
+          onchange="renewalState.termsAccepted = this.checked; document.getElementById('renewal-next-1').disabled = !this.checked;"
+          style="width:18px;height:18px;cursor:pointer">
+        <label for="renewal-terms-cb" style="cursor:pointer">I have read and accept the terms and conditions above.</label>
+      </div>
+      <div style="margin-top:20px;display:flex;justify-content:flex-end">
+        <button id="renewal-next-1" class="btn btn-primary" onclick="renewalGoStep(2)"
+          ${renewalState.termsAccepted ? '' : 'disabled'}>Continue to Step 2 →</button>
+      </div>
+    </div>
+  `;
+}
+
+// ─── Step 2: Verify employee details ─────────────────────────────────────────
+function renderRenewalStep2() {
+  const e = renewalState.eligibility.employee || {};
+  const calc = renewalState.eligibility.calc || {};
+  return `
+    <div style="background:white;border:1px solid var(--border);border-radius:14px;padding:24px">
+      <h2 style="margin:0 0 12px 0">👤 Verify Your Details</h2>
+      <div style="font-size:13px;color:var(--text2);margin-bottom:16px">
+        Please verify the details below. If anything is wrong, raise a Correction Concern from the sidebar before submitting.
+      </div>
+      <div class="form-grid">
+        <div class="detail-item"><span class="detail-key">Employee ID</span><span class="detail-val"><code>${e.emp_id || '—'}</code></span></div>
+        <div class="detail-item"><span class="detail-key">Name</span><span class="detail-val">${e.emp_name || '—'}</span></div>
+        <div class="detail-item"><span class="detail-key">Date of Birth</span><span class="detail-val">${rFmtDate(e.date_of_birth)}</span></div>
+        <div class="detail-item"><span class="detail-key">Designation</span><span class="detail-val">${e.designation || '—'}</span></div>
+        <div class="detail-item"><span class="detail-key">Department</span><span class="detail-val">${e.department || '—'}</span></div>
+        <div class="detail-item"><span class="detail-key">Unit</span><span class="detail-val">${e.unit || '—'}</span></div>
+        <div class="detail-item"><span class="detail-key">GMC Inclusion Date</span><span class="detail-val">${rFmtDate(e.gmc_inclusion_date)}</span></div>
+        <div class="detail-item"><span class="detail-key">Current CTC GMC / month</span><span class="detail-val">${rFmt(e.ctc_gmc_per_month)}</span></div>
+        <div class="detail-item"><span class="detail-key">Email</span><span class="detail-val" style="font-size:12px">${e.email_id || '—'}</span></div>
+        <div class="detail-item"><span class="detail-key">Mobile</span><span class="detail-val">${e.mobile_number || '—'}</span></div>
+        <div class="detail-item"><span class="detail-key">Current Sum Insured</span><span class="detail-val"><b>${rFmt(renewalState.eligibility.current_sum_insured)}</b></span></div>
+      </div>
+
+      <div style="margin-top:20px;padding:14px;background:#eff6ff;border-radius:10px;font-size:13px;color:#1e3a8a">
+        <b>📊 Your 25-26 figures (for reference)</b>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-top:8px">
+          <div>CTC GMC 25-26: <b>${rFmt(calc.ctc_gmc_25_26)}</b></div>
+          <div>Opening Balance: <b>${rFmt(calc.opening_balance_25_26)}</b></div>
+          <div>Salary Deductions: <b>${rFmt(calc.salary_deductions_25_26)}</b></div>
+          <div>Premium 25-26: <b>${rFmt(calc.premium_25_26)}</b></div>
+          <div style="grid-column:1/-1;border-top:1px solid #93c5fd;padding-top:6px;margin-top:4px">
+            25-26 Closing Balance: <b style="color:${(calc.closing_balance_25_26 || 0) >= 0 ? '#15803d' : '#b91c1c'}">${rFmt(calc.closing_balance_25_26)}</b>
+            <span style="color:#1e3a8a">(${(calc.closing_balance_25_26 || 0) >= 0 ? 'refundable / carry forward' : 'recovery'})</span>
+          </div>
+        </div>
+      </div>
+
+      <div style="margin-top:20px;display:flex;justify-content:space-between">
+        <button class="btn btn-secondary" onclick="renewalGoStep(1)">← Back</button>
+        <button class="btn btn-primary" onclick="renewalGoStep(3)">Continue to Step 3 →</button>
+      </div>
+    </div>
+  `;
+}
+
+// ─── Step 3: Sum Insured (top) + Dependents (below) + Summary ────────────────
+function renderRenewalStep3() {
+  const elig    = renewalState.eligibility;
+  const options = elig.available_sum_insured || [];
+  const current = elig.current_sum_insured;
+  const deps    = renewalState.dependents;
+
+  return `
+    <div style="background:white;border:1px solid var(--border);border-radius:14px;padding:24px">
+      <h2 style="margin:0 0 12px 0">📝 Renewal — Sum Insured, Dependents & Summary</h2>
+
+      <!-- ① Sum Insured on top -->
+      <div style="padding:16px;background:var(--surface2);border-radius:12px;margin-bottom:20px">
+        <div style="font-weight:700;font-size:14px;margin-bottom:10px">① Sum Insured (Family Floater)</div>
+        <div style="font-size:13px;color:var(--text2);margin-bottom:10px">
+          Current: <b>${rFmt(current)}</b> · You may increase or keep the same; <b>decrease is not allowed.</b>
+        </div>
+        <select id="renewal-si-select" onchange="renewalState.selectedSI = Number(this.value); refreshRenewalQuote();"
+          style="width:100%;max-width:340px;padding:10px;border:1px solid var(--border);border-radius:8px;font-size:14px;font-weight:600">
+          ${options.map(si => `<option value="${si}" ${si === renewalState.selectedSI ? 'selected' : ''}>${rFmt(si)}${si === current ? '  (current)' : ''}</option>`).join('')}
+        </select>
+      </div>
+
+      <!-- ② Dependents -->
+      <div style="padding:16px;background:var(--surface2);border-radius:12px;margin-bottom:20px">
+        <div style="font-weight:700;font-size:14px;margin-bottom:10px">② Dependents</div>
+        <div style="font-size:13px;color:var(--text2);margin-bottom:12px">
+          You can <b>edit name/DOB/gender</b> or <b>delete</b> existing dependents. <b>You cannot add new dependents.</b>
+          Once you delete a dependent and submit, they cannot be re-added in future renewals.
+        </div>
+        ${deps.length === 0
+          ? `<div style="padding:20px;text-align:center;color:var(--text3);background:white;border-radius:8px">No dependents on record for this renewal.</div>`
+          : `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px">
+              ${deps.map(d => renderRenewalDepCard(d)).join('')}
+            </div>`
+        }
+      </div>
+
+      <!-- ③ Live Summary -->
+      <div id="renewal-summary" style="padding:16px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:12px;margin-bottom:20px">
+        <div class="loading"><div class="spinner"></div> Calculating premium…</div>
+      </div>
+
+      <!-- Submit -->
+      <div style="padding:14px;background:#fff7ed;border-left:4px solid #f59e0b;border-radius:8px;margin-bottom:16px;font-size:13px">
+        ⚠️ Premium shown is <b>approximate</b> and may vary <b>±10%</b> based on the insurer's final policy booking.<br>
+        Sep-27 refund is an <b>estimate</b> and depends on 2027-28 increment & enrollment.
+      </div>
+
+      <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap">
+        <button class="btn btn-secondary" onclick="renewalGoStep(2)">← Back</button>
+        <button id="renewal-submit-btn" class="btn btn-primary" onclick="submitRenewal()">✅ Submit Renewal</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderRenewalDepCard(d) {
+  const isDelete = d.action === 'DELETE';
+  const relIcons = { Spouse:'💑', Son:'👦', Daughter:'👧', Father:'👨', Mother:'👩', 'Father-in-Law':'👴', 'Mother-in-Law':'👵' };
+  return `
+    <div style="background:white;border:1px solid ${isDelete ? '#fca5a5' : 'var(--border)'};border-radius:10px;padding:12px;
+                ${isDelete ? 'opacity:0.7' : ''}">
+      <div style="display:flex;justify-content:space-between;align-items:start;gap:8px">
+        <div style="font-size:24px">${relIcons[d.relation] || '👤'}</div>
+        <div style="flex:1">
+          <div style="font-weight:700;font-size:14px;${isDelete ? 'text-decoration:line-through' : ''}">${d.dependent_name}</div>
+          <div style="font-size:12px;color:var(--text2)"><b>${d.relation}</b> · DOB: ${rFmtDate(d.date_of_birth)}${d.gender ? ' · ' + d.gender : ''}</div>
+          ${d.edited ? '<div style="font-size:11px;color:#1e40af;margin-top:2px">✏️ edited</div>' : ''}
+          ${isDelete ? `<div style="font-size:11px;color:#b91c1c;margin-top:4px;font-weight:700">🗑️ Marked for deletion (${d.delete_reason === 'EXPIRED' ? 'Expired' : 'Not Continuing'})</div>` : ''}
+        </div>
+      </div>
+      <div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap">
+        ${isDelete
+          ? `<button class="btn btn-secondary btn-sm" onclick="renewalRestoreDep(${d.id})">↩ Restore</button>`
+          : `<button class="btn btn-secondary btn-sm" onclick="renewalEditDep(${d.id})">✏️ Edit</button>
+             <button class="btn btn-danger btn-sm"    onclick="renewalDeleteDep(${d.id})">🗑️ Delete</button>`
+        }
+      </div>
+    </div>
+  `;
+}
+
+// ─── Step navigation ─────────────────────────────────────────────────────────
+function renewalGoStep(n) {
+  if (n === 2 && !renewalState.termsAccepted) {
+    showToast('Please accept the terms first', 'error'); return;
+  }
+  renewalState.step = n;
+  renderRenewalStep();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+// ─── Quote refresh ────────────────────────────────────────────────────────────
+async function refreshRenewalQuote() {
+  const empId = renewalState.eligibility.employee.emp_id;
+  const si    = renewalState.selectedSI;
+  if (!si) return;
+
+  const sum = document.getElementById('renewal-summary');
+  if (sum) sum.innerHTML = `<div class="loading"><div class="spinner"></div> Calculating premium…</div>`;
+
+  try {
+    const q = await renewal.quote({ emp_id: empId, sum_insured: si });
+    renewalState.quote = q;
+    if (sum) sum.innerHTML = renderRenewalSummary(q);
+  } catch (e) {
+    if (sum) sum.innerHTML = `<div style="color:var(--danger)">❌ ${e.message}</div>`;
+  }
+}
+
+function renderRenewalSummary(q) {
+  const negNet = (q.salary_deduction_26_27 || 0) > 0;
+  return `
+    <div style="font-weight:700;font-size:14px;margin-bottom:10px">③ Live Summary — Premium & Settlement</div>
+
+    <div style="background:white;border-radius:8px;padding:12px;margin-bottom:10px">
+      <div style="font-size:12px;color:var(--text2);margin-bottom:6px"><b>Insured Members (${q.members.length})</b></div>
+      <table style="width:100%;font-size:13px;border-collapse:collapse">
+        <thead><tr style="background:var(--surface2);text-align:left">
+          <th style="padding:6px 8px">Name</th><th style="padding:6px 8px">Relation</th>
+          <th style="padding:6px 8px">Age</th><th style="padding:6px 8px;text-align:right">Annual Premium</th>
+        </tr></thead>
+        <tbody>
+          ${q.members.map(m => `<tr style="border-top:1px solid #e5e7eb">
+            <td style="padding:6px 8px">${m.member_name}</td>
+            <td style="padding:6px 8px">${m.relation}</td>
+            <td style="padding:6px 8px">${m.age_at_policy_start}</td>
+            <td style="padding:6px 8px;text-align:right">${rFmt(m.annual_premium)}</td>
+          </tr>`).join('')}
+        </tbody>
+        <tfoot><tr style="font-weight:700;background:var(--surface2)">
+          <td colspan="3" style="padding:6px 8px;text-align:right">Total Premium 26-27 (approx.)</td>
+          <td style="padding:6px 8px;text-align:right">${rFmt(q.total_premium_26_27)}</td>
+        </tr></tfoot>
+      </table>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px">
+      <div style="background:white;border-radius:8px;padding:12px">
+        <div style="font-size:11px;color:var(--text3)">26-27 CTC GMC Estimated</div>
+        <div style="font-size:18px;font-weight:700">${rFmt(q.ctc_gmc_26_27)}</div>
+      </div>
+      <div style="background:white;border-radius:8px;padding:12px">
+        <div style="font-size:11px;color:var(--text3)">25-26 Closing Balance</div>
+        <div style="font-size:18px;font-weight:700;color:${(q.closing_balance_25_26||0)>=0?'#15803d':'#b91c1c'}">${rFmt(q.closing_balance_25_26)}</div>
+      </div>
+      <div style="background:white;border-radius:8px;padding:12px">
+        <div style="font-size:11px;color:var(--text3)">Refund Sep-26 (25-26 settled)</div>
+        <div style="font-size:18px;font-weight:700;color:#15803d">${rFmt(q.refund_sep_2026)}</div>
+      </div>
+      <div style="background:white;border-radius:8px;padding:12px">
+        <div style="font-size:11px;color:var(--text3)">Refund Sep-27 Estimate (26-27)</div>
+        <div style="font-size:18px;font-weight:700;color:#15803d">${rFmt(q.refund_sep_2027_estimate)}*</div>
+      </div>
+      ${negNet ? `
+        <div style="grid-column:1/-1;background:#fef2f2;border:1px solid #fca5a5;border-radius:8px;padding:12px">
+          <div style="font-size:11px;color:#991b1b">Salary Deduction 26-27 (6-month EMI from Sep 2026)</div>
+          <div style="font-size:18px;font-weight:700;color:#b91c1c">
+            ${rFmt(q.salary_deduction_26_27)}
+            <span style="font-size:12px;font-weight:500;color:var(--text2)"> · EMI ₹${Math.round(q.emi_per_month_6mo).toLocaleString('en-IN')}/month × 6</span>
+          </div>
+        </div>` : ''
+      }
+    </div>
+    <div style="font-size:11px;color:var(--text3);margin-top:8px">* Estimate subject to 27-28 increment & enrollment.</div>
+  `;
+}
+
+// ─── Dependent actions ────────────────────────────────────────────────────────
+async function renewalDeleteDep(id) {
+  const d = renewalState.dependents.find(x => x.id === id);
+  if (!d) return;
+  const reason = await renewalAskDeleteReason(d);
+  if (!reason) return;
+
+  try {
+    await renewal.deleteDependent(id, reason);
+    d.action = 'DELETE'; d.delete_reason = reason;
+    showToast('Dependent marked for deletion', 'success');
+    renderRenewalStep();
+  } catch (e) { showToast(e.message, 'error'); }
+}
+
+async function renewalRestoreDep(id) {
+  try {
+    await renewal.restoreDependent(id);
+    const d = renewalState.dependents.find(x => x.id === id);
+    if (d) { d.action = 'KEEP'; d.delete_reason = null; }
+    showToast('Dependent restored', 'success');
+    renderRenewalStep();
+  } catch (e) { showToast(e.message, 'error'); }
+}
+
+function renewalAskDeleteReason(dep) {
+  return new Promise(resolve => {
+    const html = `
+      <div style="position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:2000;
+                  display:flex;align-items:center;justify-content:center;padding:20px" id="renewal-del-modal">
+        <div style="background:white;border-radius:14px;padding:24px;max-width:480px;width:100%">
+          <h3 style="margin:0 0 12px 0">🗑️ Delete ${dep.dependent_name}?</h3>
+          <div style="background:#fef2f2;border-left:4px solid #dc2626;padding:12px;border-radius:8px;font-size:13px;margin-bottom:14px">
+            <b>⚠️ Important:</b> Once you delete and submit, this dependent <b>cannot be re-added</b> in future renewals.
+          </div>
+          <div style="font-weight:600;font-size:13px;margin-bottom:8px">Reason for deletion:</div>
+          <label style="display:flex;align-items:start;gap:10px;padding:10px;border:1px solid var(--border);border-radius:8px;cursor:pointer;margin-bottom:8px">
+            <input type="radio" name="del-reason" value="EXPIRED">
+            <div><b>Dependent is no longer alive</b><br><span style="font-size:12px;color:var(--text2)">Use this if the dependent has passed away.</span></div>
+          </label>
+          <label style="display:flex;align-items:start;gap:10px;padding:10px;border:1px solid var(--border);border-radius:8px;cursor:pointer">
+            <input type="radio" name="del-reason" value="NOT_CONTINUING">
+            <div><b>Do not want to continue coverage</b><br><span style="font-size:12px;color:var(--text2)">Use this if you do not want to cover this dependent going forward.</span></div>
+          </label>
+          <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end">
+            <button class="btn btn-secondary" id="rdm-cancel">Cancel</button>
+            <button class="btn btn-danger"    id="rdm-confirm">Delete</button>
+          </div>
+        </div>
+      </div>`;
+    document.body.insertAdjacentHTML('beforeend', html);
+    const modal = document.getElementById('renewal-del-modal');
+    document.getElementById('rdm-cancel').onclick = () => { modal.remove(); resolve(null); };
+    document.getElementById('rdm-confirm').onclick = () => {
+      const sel = modal.querySelector('input[name="del-reason"]:checked');
+      if (!sel) { showToast('Please pick a reason', 'error'); return; }
+      modal.remove(); resolve(sel.value);
+    };
+  });
+}
+
+async function renewalEditDep(id) {
+  const d = renewalState.dependents.find(x => x.id === id);
+  if (!d) return;
+  const html = `
+    <div style="position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:2000;
+                display:flex;align-items:center;justify-content:center;padding:20px" id="renewal-edit-modal">
+      <div style="background:white;border-radius:14px;padding:24px;max-width:520px;width:100%">
+        <h3 style="margin:0 0 12px 0">✏️ Edit ${d.dependent_name}</h3>
+        <div style="font-size:12px;color:var(--text2);margin-bottom:14px">
+          You can fix typos in <b>name, DOB, or gender</b>. <b>Relation cannot be changed.</b>
+        </div>
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Relation (locked)</label>
+            <input type="text" value="${d.relation}" disabled style="background:var(--surface2)">
+          </div>
+          <div class="form-group">
+            <label>Name *</label>
+            <input type="text" id="red-name" value="${(d.dependent_name||'').replace(/"/g,'&quot;')}">
+          </div>
+          <div class="form-group">
+            <label>Date of Birth *</label>
+            <input type="date" id="red-dob" value="${d.date_of_birth || ''}">
+          </div>
+          <div class="form-group">
+            <label>Gender</label>
+            <select id="red-gender">
+              <option value="">—</option>
+              <option value="Male"   ${d.gender==='Male'?'selected':''}>Male</option>
+              <option value="Female" ${d.gender==='Female'?'selected':''}>Female</option>
+            </select>
+          </div>
+        </div>
+        <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end">
+          <button class="btn btn-secondary" onclick="document.getElementById('renewal-edit-modal').remove()">Cancel</button>
+          <button class="btn btn-primary"    id="red-save">Save</button>
+        </div>
+      </div>
+    </div>`;
+  document.body.insertAdjacentHTML('beforeend', html);
+  document.getElementById('red-save').onclick = async () => {
+    const name = document.getElementById('red-name').value.trim();
+    const dob  = document.getElementById('red-dob').value.trim();
+    const gen  = document.getElementById('red-gender').value;
+    if (!name) return showToast('Name is required', 'error');
+    if (!dob)  return showToast('DOB is required', 'error');
+    try {
+      await renewal.editDependent(id, { dependent_name: name, date_of_birth: dob, gender: gen || null });
+      d.dependent_name = name; d.date_of_birth = dob; d.gender = gen; d.edited = true;
+      showToast('Dependent updated', 'success');
+      document.getElementById('renewal-edit-modal').remove();
+      renderRenewalStep();
+    } catch (e) { showToast(e.message, 'error'); }
+  };
+}
+
+// ─── Submit ──────────────────────────────────────────────────────────────────
+async function submitRenewal() {
+  if (renewalState.submitting) return;
+  const empId = renewalState.eligibility.employee.emp_id;
+  const si    = renewalState.selectedSI;
+  if (!si) return showToast('Please select Sum Insured', 'error');
+
+  if (!confirm('Submit your 2026-27 GMC Renewal? You will not be able to add deleted dependents back in future cycles.')) return;
+
+  const btn = document.getElementById('renewal-submit-btn');
+  renewalState.submitting = true;
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Submitting…'; }
+
+  try {
+    const r = await renewal.submit({ emp_id: empId, sum_insured: si, terms_accepted: true });
+    showToast('✅ Renewal submitted!', 'success');
+    renewalState.eligibility.existing_renewal = { enrollment_id: r.enrollment_id, enrollment_status: 'SUBMITTED', submitted_at: new Date().toISOString() };
+    renderRenewalAlreadySubmitted(renewalState.eligibility);
+  } catch (e) {
+    showToast(e.message, 'error');
+    if (btn) { btn.disabled = false; btn.textContent = '✅ Submit Renewal'; }
+  } finally {
+    renewalState.submitting = false;
+  }
+}
+
+function renderRenewalAlreadySubmitted(elig) {
+  const c = document.getElementById('content');
+  const r = elig.existing_renewal;
+  c.innerHTML = `
+    <div style="max-width:720px;margin:40px auto;background:white;border:1px solid var(--border);border-radius:14px;padding:32px;text-align:center">
+      <div style="font-size:48px">✅</div>
+      <h2 style="margin:10px 0">Renewal Submitted</h2>
+      <div style="color:var(--text2);font-size:14px;margin-bottom:8px">
+        Your GMC Renewal 2026-27 has been submitted on <b>${rFmtDate(r.submitted_at)}</b>.
+      </div>
+      <div style="color:var(--text2);font-size:13px;margin-bottom:16px">
+        Enrollment ID: <code>#${r.enrollment_id}</code> · Status: <b>${r.enrollment_status}</b>
+      </div>
+      <div style="background:#eff6ff;padding:14px;border-radius:10px;font-size:13px;color:#1e3a8a;text-align:left">
+        ✉️ A confirmation email with your insured members, premium estimate and settlement details has been sent to <b>${elig.employee.email_id}</b>.<br><br>
+        ⚠️ Premium is approximate (±10%). Final amount will be confirmed after the insurer's policy booking.
+      </div>
+      <div style="margin-top:20px">
+        <button class="btn btn-secondary" onclick="navigate('employee_dashboard')">← Back to Dashboard</button>
+      </div>
+    </div>
+  `;
+}
+
+// Expose
+window.renderRenewalPage    = renderRenewalPage;
+window.renewalGoStep        = renewalGoStep;
+window.refreshRenewalQuote  = refreshRenewalQuote;
+window.renewalEditDep       = renewalEditDep;
+window.renewalDeleteDep     = renewalDeleteDep;
+window.renewalRestoreDep    = renewalRestoreDep;
+window.submitRenewal        = submitRenewal;
+window.renewalState         = renewalState;
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ─── ADMIN: Renewal Progress Dashboard ────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+async function renderAdminRenewalProgress() {
+  const c = document.getElementById('content');
+  c.innerHTML = `<div class="loading"><div class="spinner"></div> Loading renewal progress…</div>`;
+
+  let res;
+  try { res = await renewal.admin.progress(); }
+  catch (e) { c.innerHTML = `<div class="empty-state"><div class="icon">⚠️</div>${e.message}</div>`; return; }
+
+  const rows = res.data || [];
+  const t = res.totals || {};
+
+  c.innerHTML = `
+    <div class="stats-grid" style="margin-bottom:20px">
+      <div class="stat-card blue"><div class="stat-icon">👥</div><div class="stat-label">Eligible Employees</div><div class="stat-value">${t.total_eligible || 0}</div></div>
+      <div class="stat-card green"><div class="stat-icon">✅</div><div class="stat-label">Submitted</div><div class="stat-value">${t.submitted || 0}</div><div class="stat-sub">${t.progress_percent || 0}%</div></div>
+      <div class="stat-card amber"><div class="stat-icon">👀</div><div class="stat-label">Visited / Not Submitted</div><div class="stat-value">${t.visited_not_submitted || 0}</div></div>
+      <div class="stat-card purple"><div class="stat-icon">🚪</div><div class="stat-label">Never Logged In</div><div class="stat-value">${t.never_logged_in || 0}</div></div>
+    </div>
+
+    <div style="background:white;border:1px solid var(--border);border-radius:14px;padding:16px;margin-bottom:16px">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:12px">
+        <h3 style="margin:0">📋 Per-Employee Progress</h3>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <input type="text" id="adm-renewal-search" placeholder="🔍 Search emp_id / name…"
+            oninput="adminRenewalFilter(this.value)" style="padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:13px;min-width:220px">
+          <select id="adm-renewal-stage" onchange="adminRenewalFilter()" style="padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:13px">
+            <option value="">All stages</option>
+            <option value="SUBMITTED">Submitted</option>
+            <option value="VISITED_NOT_SUBMITTED">Visited / Not Submitted</option>
+            <option value="LOGGED_IN_NOT_VISITED">Logged in / Not Visited</option>
+            <option value="NEVER_LOGGED_IN">Never Logged In</option>
+          </select>
+          <button class="btn btn-secondary btn-sm" onclick="renderAdminRenewalProgress()">↺ Refresh</button>
+        </div>
+      </div>
+      <div style="overflow-x:auto">
+        <table class="data-table" id="adm-renewal-table">
+          <thead><tr>
+            <th>Emp ID</th><th>Name</th><th>Email</th><th>Stage</th>
+            <th>Last Login</th><th>Last Visit</th><th>Submitted</th>
+            <th>Reminders</th><th>Paused</th><th>Actions</th>
+          </tr></thead>
+          <tbody>
+            ${rows.map(r => adminRenewalRow(r)).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+
+  window._admRenewalRows = rows;
+}
+
+function adminRenewalRow(r) {
+  const stageBadge = {
+    SUBMITTED:             '<span class="badge badge-green">Submitted</span>',
+    VISITED_NOT_SUBMITTED: '<span class="badge badge-amber">Visited</span>',
+    LOGGED_IN_NOT_VISITED: '<span class="badge badge-blue">Logged In</span>',
+    NEVER_LOGGED_IN:       '<span class="badge badge-red">Never Logged In</span>',
+  }[r.stage] || r.stage;
+  return `<tr data-stage="${r.stage}" data-search="${(r.emp_id+' '+(r.full_name||'')).toLowerCase()}">
+    <td><code>${r.emp_id}</code></td>
+    <td>${r.full_name || '—'}</td>
+    <td style="font-size:11px">${r.email_id || '—'}</td>
+    <td>${stageBadge}</td>
+    <td style="font-size:12px">${r.last_logged_in_at ? rFmtDate(r.last_logged_in_at) : '—'}</td>
+    <td style="font-size:12px">${r.visited_renewal_page_at ? rFmtDate(r.visited_renewal_page_at) : '—'}</td>
+    <td style="font-size:12px">${r.submitted_at ? rFmtDate(r.submitted_at) : '—'}</td>
+    <td>${r.reminder_count || 0}</td>
+    <td>${r.reminder_paused ? '<span class="badge badge-red">Paused</span>' : '—'}</td>
+    <td style="white-space:nowrap">
+      ${r.stage !== 'SUBMITTED' ? `<button class="btn btn-secondary btn-sm" onclick="adminRenewalRemind('${r.emp_id}')">✉️ Remind</button>` : ''}
+      <button class="btn btn-secondary btn-sm" onclick="adminRenewalTogglePause('${r.emp_id}', ${!r.reminder_paused})">${r.reminder_paused ? '▶' : '⏸'}</button>
+    </td>
+  </tr>`;
+}
+
+function adminRenewalFilter(searchVal) {
+  if (searchVal !== undefined) document.getElementById('adm-renewal-search').value = searchVal;
+  const s = (document.getElementById('adm-renewal-search')?.value || '').toLowerCase();
+  const stage = document.getElementById('adm-renewal-stage')?.value || '';
+  document.querySelectorAll('#adm-renewal-table tbody tr').forEach(tr => {
+    const matchS = !s || tr.dataset.search.includes(s);
+    const matchT = !stage || tr.dataset.stage === stage;
+    tr.style.display = (matchS && matchT) ? '' : 'none';
+  });
+}
+
+async function adminRenewalRemind(empId) {
+  if (!confirm(`Send reminder email to ${empId}?`)) return;
+  try {
+    await renewal.admin.remind(empId);
+    showToast('Reminder sent', 'success');
+    renderAdminRenewalProgress();
+  } catch (e) { showToast(e.message, 'error'); }
+}
+
+async function adminRenewalTogglePause(empId, paused) {
+  try {
+    await renewal.admin.pause(empId, paused);
+    showToast(paused ? 'Reminders paused' : 'Reminders resumed', 'success');
+    renderAdminRenewalProgress();
+  } catch (e) { showToast(e.message, 'error'); }
+}
+
+window.renderAdminRenewalProgress = renderAdminRenewalProgress;
+window.adminRenewalFilter         = adminRenewalFilter;
+window.adminRenewalRemind         = adminRenewalRemind;
+window.adminRenewalTogglePause    = adminRenewalTogglePause;
