@@ -10,7 +10,7 @@ const router = Router();
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const RENEWAL_POLICY_YEAR    = '2026-27';
-const RENEWAL_WINDOW_OPEN_AT = new Date('2026-07-01T00:00:00+05:30');
+const RENEWAL_WINDOW_OPEN_AT  = new Date('2026-06-05T00:00:00+05:30');   // ← TESTING: opened now (was 2026-07-01)
 const RENEWAL_WINDOW_CLOSE_AT = new Date('2026-07-15T23:59:59+05:30');
 const POLICY_START_DATE      = '2026-08-01';
 const EMI_MONTHS             = 6;

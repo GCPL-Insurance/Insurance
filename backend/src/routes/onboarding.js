@@ -358,7 +358,7 @@ router.get('/enrollment-data', authMiddleware, async (req, res) => {
         // 1. employees — canonical HR master (preferred source)
         supabase
           .from('employees')
-          .select('emp_id, emp_name, gender, date_of_birth, date_of_joining, department, designation, ctc_gmc_per_month, unit, gmc_inclusion_date, gmc_effective_date, is_active, status')
+          .select('emp_id, emp_name, gender, date_of_birth, date_of_joining, department, designation, ctc_gmc_per_month, unit, gmc_inclusion_date, gmc_effective_date, is_active, status, mobile_number, email_id')
           .eq('emp_id', emp_id)
           .single(),
         // 2. employee_onboarding — fallback / supplementary fields (mobile, email)
@@ -418,9 +418,9 @@ router.get('/enrollment-data', authMiddleware, async (req, res) => {
       unit:               pick(mainEmp?.unit,               onboarding?.unit),
       gmc_inclusion_date: pick(mainEmp?.gmc_inclusion_date, onboarding?.gmc_inclusion_date),
       gmc_effective_date: mainEmp?.gmc_effective_date ?? null,
-      // contact fields only exist in onboarding
-      mobile_number:      onboarding?.mobile_number ?? null,
-      email_id:           onboarding?.email_id ?? null,
+      // contact fields: employees table is now primary; onboarding is fallback
+      mobile_number:      pick(mainEmp?.mobile_number, onboarding?.mobile_number),
+      email_id:           pick(mainEmp?.email_id,      onboarding?.email_id),
       onboarding_status:  onboarding?.onboarding_status ?? 'pending',
       _source:            mainEmp ? (onboarding ? 'merged' : 'employees_only') : 'onboarding_only',
     };
@@ -433,8 +433,8 @@ router.get('/enrollment-data', authMiddleware, async (req, res) => {
       enrollment: enrollmentDraft,
       rate_cards: rateRes?.data || [],
       profile: {
-        mobile_number: onboarding?.mobile_number || enrollmentDraft?.mobile_number || null,
-        email:         onboarding?.email_id      || enrollmentDraft?.email_id      || null,
+        mobile_number: pick(mainEmp?.mobile_number, onboarding?.mobile_number, enrollmentDraft?.mobile_number),
+        email:         pick(mainEmp?.email_id,      onboarding?.email_id,      enrollmentDraft?.email_id),
       },
       existing_dependents: existingDependents,
       // Pre-calculated total CTC GMC from vw_employee_ctc_gmc_total.
@@ -461,7 +461,7 @@ router.post('/enrollment', authMiddleware, async (req, res) => {
       .from('employee_gmc_enrollment')
       .select('enrollment_id, enrollment_status')
       .eq('emp_id', emp_id)
-      .single();
+      .maybeSingle();
 
     if (existing && existing.enrollment_status === 'SUBMITTED')
       return res.status(400).json({ error: 'Enrollment already submitted and cannot be modified.' });
@@ -477,16 +477,18 @@ router.post('/enrollment', authMiddleware, async (req, res) => {
 
     if (!existing) enrollmentRecord.created_at = new Date().toISOString();
 
-    const { data: upserted, error: upsertError } = await supabase
+    const { data: upsertedRows, error: upsertError } = await supabase
       .from('employee_gmc_enrollment')
       .upsert(enrollmentRecord, { onConflict: 'emp_id' })
-      .select('enrollment_id')
-      .single();
+      .select('enrollment_id');
 
     if (upsertError) {
       console.error('Enrollment upsert error:', upsertError);
       return res.status(500).json({ error: 'Failed to save enrollment' });
     }
+
+    // .select() returns an array; grab the first row
+    const upserted = upsertedRows?.[0] ?? null;
 
     // ── Insert into employee_gmc_enrollment_insured ───────────────────────────
     const enrollment_id = upserted?.enrollment_id || existing?.enrollment_id;
