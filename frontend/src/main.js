@@ -5542,6 +5542,126 @@ window.renewalState         = renewalState;
 // ═══════════════════════════════════════════════════════════════════════════════
 // ─── ADMIN: Renewal Progress Dashboard ────────────────────────────────────────
 // ═══════════════════════════════════════════════════════════════════════════════
+
+// ─── RENEWAL WINDOW CONTROL HELPERS ───────────────────────────────────────────
+
+// Load renewal window config from backend API
+async function loadRenewalWindowConfig() {
+  try {
+    const res = await apiFetch('/api/renewal/window-config', { method: 'GET' });
+    return res.data || {};
+  } catch (err) {
+    console.error('Error loading window config:', err);
+    return { window_open: true };
+  }
+}
+
+// Toggle window open/close
+async function adminToggleRenewalWindow(openStatus) {
+  try {
+    const res = await apiFetch('/api/renewal/window-config', {
+      method: 'POST',
+      body: { window_open: openStatus }
+    });
+    
+    if (res.error) {
+      showToast('❌ ' + res.error, 'error');
+      return;
+    }
+
+    showToast(openStatus ? '✅ Enrollment OPENED' : '⛔ Enrollment CLOSED', 'success');
+    setTimeout(() => loadAndDisplayWindowStatus(), 500);
+    
+  } catch (err) {
+    showToast('❌ Error: ' + err.message, 'error');
+  }
+}
+
+// Update deadline
+async function adminUpdateDeadline() {
+  try {
+    const newDeadline = document.getElementById('deadline-date-input').value;
+    
+    const res = await apiFetch('/api/renewal/window-config', {
+      method: 'POST',
+      body: { deadline_date: newDeadline }
+    });
+    
+    if (res.error) {
+      showToast('❌ ' + res.error, 'error');
+      return;
+    }
+
+    showToast('✅ Deadline updated', 'success');
+    setTimeout(() => loadAndDisplayWindowStatus(), 500);
+    
+  } catch (err) {
+    showToast('❌ Error: ' + err.message, 'error');
+  }
+}
+
+// Toggle re-submission
+async function adminToggleResubmit() {
+  try {
+    const allowResubmit = document.getElementById('allow-resubmit-checkbox').checked;
+    
+    const res = await apiFetch('/api/renewal/window-config', {
+      method: 'POST',
+      body: { allow_resubmit: allowResubmit }
+    });
+    
+    if (res.error) {
+      showToast('❌ ' + res.error, 'error');
+      return;
+    }
+
+    showToast(allowResubmit ? '✅ Re-submission ALLOWED' : '✅ Re-submission BLOCKED', 'success');
+    
+  } catch (err) {
+    showToast('❌ Error: ' + err.message, 'error');
+  }
+}
+
+// Load and display current window status
+async function loadAndDisplayWindowStatus() {
+  const config = await loadRenewalWindowConfig();
+
+  // Update status display
+  const statusDiv = document.getElementById('window-status-display');
+  if (statusDiv) {
+    const statusBadge = config.window_open 
+      ? '<span style="background:#28a745;color:white;padding:4px 12px;border-radius:4px;">✅ OPEN</span>'
+      : '<span style="background:#dc3545;color:white;padding:4px 12px;border-radius:4px;">⛔ CLOSED</span>';
+    
+    statusDiv.innerHTML = `
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px">
+        <div><strong>Status:</strong><br>${statusBadge}</div>
+        <div><strong>Deadline:</strong><br>${config.deadline_date ? new Date(config.deadline_date).toLocaleDateString() : '—'}</div>
+        <div><strong>Re-submit:</strong><br>${config.allow_resubmit ? '✅ Allowed' : '❌ Not allowed'}</div>
+        <div><strong>Updated:</strong><br><small>${config.updated_at ? new Date(config.updated_at).toLocaleString() : '—'}</small></div>
+      </div>
+    `;
+  }
+
+  // Update form fields
+  if (document.getElementById('deadline-date-input')) {
+    document.getElementById('deadline-date-input').value = 
+      config.deadline_date ? config.deadline_date.split('T')[0] : '2026-07-15';
+  }
+  
+  if (document.getElementById('allow-resubmit-checkbox')) {
+    document.getElementById('allow-resubmit-checkbox').checked = config.allow_resubmit || false;
+  }
+
+  // Disable buttons if state matches
+  const openBtn = document.getElementById('open-window-btn');
+  const closeBtn = document.getElementById('close-window-btn');
+  if (openBtn && closeBtn) {
+    openBtn.disabled = config.window_open;
+    closeBtn.disabled = !config.window_open;
+  }
+}
+
 async function renderAdminRenewalProgress() {
   const c = document.getElementById('content');
   c.innerHTML = `<div class="loading"><div class="spinner"></div> Loading renewal progress…</div>`;
@@ -5559,6 +5679,31 @@ async function renderAdminRenewalProgress() {
       <div class="stat-card green"><div class="stat-icon">✅</div><div class="stat-label">Submitted</div><div class="stat-value">${t.submitted || 0}</div><div class="stat-sub">${t.progress_percent || 0}%</div></div>
       <div class="stat-card amber"><div class="stat-icon">👀</div><div class="stat-label">Visited / Not Submitted</div><div class="stat-value">${t.visited_not_submitted || 0}</div></div>
       <div class="stat-card purple"><div class="stat-icon">🚪</div><div class="stat-label">Never Logged In</div><div class="stat-value">${t.never_logged_in || 0}</div></div>
+    </div>
+
+    <!-- ✅ RENEWAL WINDOW CONTROL PANEL -->
+    <div style="background:white;border:2px solid #0066cc;border-radius:14px;padding:20px;margin-bottom:16px">
+      <h3 style="margin:0 0 16px 0;color:#0066cc">🔄 Renewal Window Control</h3>
+      <div id="window-status-display" style="background:#f8f9fa;padding:12px;border-radius:8px;margin-bottom:16px">Loading status…</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px">
+        <button class="btn btn-success" id="open-window-btn" onclick="adminToggleRenewalWindow(true)" style="padding:12px;font-weight:bold">✅ OPEN Enrollment</button>
+        <button class="btn btn-danger" id="close-window-btn" onclick="adminToggleRenewalWindow(false)" style="padding:12px;font-weight:bold">⛔ CLOSE Enrollment</button>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 120px;gap:10px;margin-bottom:16px">
+        <div>
+          <label style="display:block;margin-bottom:4px;font-weight:bold;font-size:13px">Deadline Date</label>
+          <input type="date" id="deadline-date-input" value="2026-07-15" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px">
+        </div>
+        <div style="display:flex;align-items:flex-end">
+          <button class="btn btn-primary" onclick="adminUpdateDeadline()" style="width:100%;padding:8px">Update</button>
+        </div>
+      </div>
+      <div style="padding:12px;background:#f8f9fa;border-radius:8px">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin:0">
+          <input type="checkbox" id="allow-resubmit-checkbox" onchange="adminToggleResubmit()" style="width:18px;height:18px;cursor:pointer">
+          <span><strong>Allow employees to re-submit enrollment</strong></span>
+        </label>
+      </div>
     </div>
 
     <div style="background:white;border:1px solid var(--border);border-radius:14px;padding:16px;margin-bottom:16px">
@@ -5593,7 +5738,9 @@ async function renderAdminRenewalProgress() {
   `;
 
   window._admRenewalRows = rows;
+  setTimeout(() => loadAndDisplayWindowStatus(), 500);
 }
+
 
 function adminRenewalRow(r) {
   const stageBadge = {
@@ -5647,7 +5794,14 @@ async function adminRenewalTogglePause(empId, paused) {
   } catch (e) { showToast(e.message, 'error'); }
 }
 
-window.renderAdminRenewalProgress = renderAdminRenewalProgress;
-window.adminRenewalFilter         = adminRenewalFilter;
-window.adminRenewalRemind         = adminRenewalRemind;
-window.adminRenewalTogglePause    = adminRenewalTogglePause;
+// Register all functions
+window.loadRenewalWindowConfig     = loadRenewalWindowConfig;
+window.adminToggleRenewalWindow    = adminToggleRenewalWindow;
+window.adminUpdateDeadline         = adminUpdateDeadline;
+window.adminToggleResubmit         = adminToggleResubmit;
+window.loadAndDisplayWindowStatus  = loadAndDisplayWindowStatus;
+window.renderAdminRenewalProgress  = renderAdminRenewalProgress;
+window.adminRenewalFilter          = adminRenewalFilter;
+window.adminRenewalRemind          = adminRenewalRemind;
+window.adminRenewalTogglePause     = adminRenewalTogglePause;
+

@@ -557,4 +557,106 @@ router.post('/_track-login', async (req, res) => {
 });
 
 
+
+// ─── RENEWAL WINDOW CONFIG ROUTES ─────────────────────────────────────────────
+
+// Helper: Validate admin role
+const validateAdminRole = (req, res, next) => {
+  if (!['admin','hr'].includes(req.user?.role)) {
+    return res.status(403).json({ data: null, error: 'Admin/HR role required' });
+  }
+  next();
+};
+
+// GET /api/renewal/window-config - Fetch current renewal window configuration
+router.get('/window-config', async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('renewal_config_2026_27')
+      .select('id, window_open, window_title, window_description, instructions_html, deadline_date, allow_resubmit, updated_at, updated_by')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .single();
+
+    if (error) {
+      console.log('Note: renewal_config_2026_27 may not exist. Using defaults.');
+      return res.json({ 
+        data: {
+          id: 1,
+          window_open: true,
+          window_title: 'GMC Renewal 2026-27',
+          deadline_date: '2026-07-15',
+          allow_resubmit: false,
+          updated_at: new Date().toISOString(),
+          updated_by: 'system'
+        },
+        error: null 
+      });
+    }
+
+    res.json({ data, error: null });
+  } catch (err) {
+    console.error('Error fetching window config:', err);
+    res.status(500).json({ data: null, error: 'Failed to fetch window config' });
+  }
+});
+
+// POST /api/renewal/window-config - Update renewal window configuration (ADMIN ONLY)
+router.post('/window-config', validateAdminRole, async (req, res) => {
+  try {
+    const { window_open, deadline_date, allow_resubmit } = req.body;
+    const empId = req.user?.emp_id || 'unknown';
+    const adminName = req.user?.user_name || empId;
+
+    // Get current config ID
+    const { data: currentConfig, error: fetchError } = await supabase
+      .from('renewal_config_2026_27')
+      .select('id')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .single();
+
+    if (fetchError || !currentConfig) {
+      return res.status(400).json({ 
+        data: null,
+        error: 'Renewal config not found. Run SQL setup first.'
+      });
+    }
+
+    // Build update payload
+    const updatePayload = {
+      updated_at: new Date().toISOString(),
+      updated_by: `${adminName}(${empId})`
+    };
+
+    if (window_open !== undefined) updatePayload.window_open = window_open;
+    if (deadline_date !== undefined) updatePayload.deadline_date = deadline_date;
+    if (allow_resubmit !== undefined) updatePayload.allow_resubmit = allow_resubmit;
+
+    // Update the config table
+    const { data, error } = await supabase
+      .from('renewal_config_2026_27')
+      .update(updatePayload)
+      .eq('id', currentConfig.id)
+      .select();
+
+    if (error) {
+      console.error('Error updating window config:', error);
+      return res.status(400).json({ data: null, error: 'Failed to update: ' + error.message });
+    }
+
+    const action = window_open !== undefined 
+      ? (window_open ? 'OPENED' : 'CLOSED')
+      : (deadline_date ? 'DEADLINE_UPDATED' : 'RESUBMIT_TOGGLED');
+    
+    console.log(`✅ Renewal window ${action} by ${adminName}(${empId})`);
+
+    res.json({ data: data?.[0] || updatePayload, error: null });
+
+  } catch (err) {
+    console.error('Error in window-config POST:', err);
+    res.status(500).json({ data: null, error: 'Server error: ' + err.message });
+  }
+});
+
 export default router;
