@@ -4999,6 +4999,7 @@ const renewalState = {
   selectedSI: null,
   quote: null,
   submitting: false,
+  validationErrors: [],          // ✅ FIX: tracks missing mobile/email from backend
 };
 
 function rFmt(v) {
@@ -5062,6 +5063,9 @@ async function renderRenewalPage() {
     renewalState.dependents = [];
     console.warn('[renewal] dependents fetch failed:', e.message);
   }
+
+  // ✅ FIX: Store validation errors returned by backend (missing mobile/email)
+  renewalState.validationErrors = elig.validation_errors || [];
 
   // Default SI = first available (= current SI, since lower options are filtered out)
   if (!renewalState.selectedSI) {
@@ -5148,14 +5152,39 @@ function renderRenewalStep1() {
 
 // ─── Step 2: Verify employee details ─────────────────────────────────────────
 function renderRenewalStep2() {
-  const e = renewalState.eligibility.employee || {};
+  const e    = renewalState.eligibility.employee || {};
   const calc = renewalState.eligibility.calc || {};
+
+  // ✅ FIX: Show warning banners if required contact fields are missing
+  const mobileWarning = !e.mobile_number ? `
+    <div style="background:#fecaca;border:1px solid #fca5a5;border-radius:10px;padding:12px 14px;margin-bottom:14px;color:#991b1b;font-size:13px;display:flex;gap:10px;align-items:flex-start">
+      <span style="font-size:18px;line-height:1">⚠️</span>
+      <div>
+        <b>Mobile number is missing from your employee record.</b>
+        This is required to submit your renewal. Please
+        <button onclick="navigate('concerns')" style="background:none;border:none;color:#991b1b;text-decoration:underline;cursor:pointer;font-size:inherit;padding:0;font-weight:600">raise a concern to HR</button>
+        to update it before proceeding.
+      </div>
+    </div>` : '';
+
+  const emailWarning = !e.email_id ? `
+    <div style="background:#fecaca;border:1px solid #fca5a5;border-radius:10px;padding:12px 14px;margin-bottom:14px;color:#991b1b;font-size:13px;display:flex;gap:10px;align-items:flex-start">
+      <span style="font-size:18px;line-height:1">⚠️</span>
+      <div>
+        <b>Email ID is missing from your employee record.</b>
+        This is required to submit your renewal. Please
+        <button onclick="navigate('concerns')" style="background:none;border:none;color:#991b1b;text-decoration:underline;cursor:pointer;font-size:inherit;padding:0;font-weight:600">raise a concern to HR</button>
+        to update it before proceeding.
+      </div>
+    </div>` : '';
+
   return `
     <div style="background:white;border:1px solid var(--border);border-radius:14px;padding:24px">
       <h2 style="margin:0 0 12px 0">👤 Verify Your Details</h2>
       <div style="font-size:13px;color:var(--text2);margin-bottom:16px">
         Please verify the details below. If anything is wrong, raise a Correction Concern from the sidebar before submitting.
       </div>
+      ${mobileWarning}${emailWarning}
       <div class="form-grid">
         <div class="detail-item"><span class="detail-key">Employee ID</span><span class="detail-val"><code>${e.emp_id || '—'}</code></span></div>
         <div class="detail-item"><span class="detail-key">Name</span><span class="detail-val">${e.emp_name || '—'}</span></div>
@@ -5165,8 +5194,16 @@ function renderRenewalStep2() {
         <div class="detail-item"><span class="detail-key">Unit</span><span class="detail-val">${e.unit || '—'}</span></div>
         <div class="detail-item"><span class="detail-key">GMC Inclusion Date</span><span class="detail-val">${rFmtDate(e.gmc_inclusion_date)}</span></div>
         <div class="detail-item"><span class="detail-key">Current CTC GMC / month</span><span class="detail-val">${rFmt(e.ctc_gmc_per_month)}</span></div>
-        <div class="detail-item"><span class="detail-key">Email</span><span class="detail-val" style="font-size:12px">${e.email_id || '—'}</span></div>
-        <div class="detail-item"><span class="detail-key">Mobile</span><span class="detail-val">${e.mobile_number || '—'}</span></div>
+        <div class="detail-item"><span class="detail-key">Email</span>
+          <span class="detail-val" style="font-size:12px${!e.email_id ? ';color:#b91c1c;font-weight:600' : ''}">
+            ${e.email_id || '⚠️ Missing'}
+          </span>
+        </div>
+        <div class="detail-item"><span class="detail-key">Mobile</span>
+          <span class="detail-val${!e.mobile_number ? '" style="color:#b91c1c;font-weight:600' : ''}">
+            ${e.mobile_number || '⚠️ Missing'}
+          </span>
+        </div>
         <div class="detail-item"><span class="detail-key">Current Sum Insured</span><span class="detail-val"><b>${rFmt(renewalState.eligibility.current_sum_insured)}</b></span></div>
       </div>
 
@@ -5243,7 +5280,23 @@ function renderRenewalStep3() {
 
       <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap">
         <button class="btn btn-secondary" onclick="renewalGoStep(2)">← Back</button>
-        <button id="renewal-submit-btn" class="btn btn-primary" onclick="submitRenewal()">✅ Submit Renewal</button>
+        ${(() => {
+          const e = renewalState.eligibility.employee || {};
+          const canSubmit = !!e.mobile_number && !!e.email_id;
+          const tip = !canSubmit
+            ? (!e.mobile_number && !e.email_id ? 'Mobile number and email are missing'
+              : !e.mobile_number ? 'Mobile number is missing from your record'
+              : 'Email ID is missing from your record')
+              + ' — please contact HR to update before submitting.'
+            : '';
+          return `<button id="renewal-submit-btn" class="btn btn-primary"
+            onclick="submitRenewal()"
+            ${canSubmit ? '' : 'disabled'}
+            title="${tip}"
+            style="${!canSubmit ? 'opacity:0.55;cursor:not-allowed' : ''}">
+            ✅ Submit Renewal
+          </button>`;
+        })()}
       </div>
     </div>
   `;
@@ -5481,9 +5534,17 @@ async function renewalEditDep(id) {
 // ─── Submit ──────────────────────────────────────────────────────────────────
 async function submitRenewal() {
   if (renewalState.submitting) return;
-  const empId = renewalState.eligibility.employee.emp_id;
+  const emp   = renewalState.eligibility.employee;
+  const empId = emp.emp_id;
   const si    = renewalState.selectedSI;
   if (!si) return showToast('Please select Sum Insured', 'error');
+
+  // ✅ FIX: Guard — block submission if required fields missing
+  if (!emp.mobile_number || !emp.email_id) {
+    const missing = [!emp.mobile_number && 'mobile number', !emp.email_id && 'email ID'].filter(Boolean).join(' and ');
+    showToast(`❌ Cannot submit: ${missing} is missing from your employee record. Please contact HR.`, 'error');
+    return;
+  }
 
   if (!confirm('Submit your 2026-27 GMC Renewal? You will not be able to add deleted dependents back in future cycles.')) return;
 
@@ -5491,13 +5552,66 @@ async function submitRenewal() {
   renewalState.submitting = true;
   if (btn) { btn.disabled = true; btn.textContent = '⏳ Submitting…'; }
 
+  // ✅ FIX: Inner helper — attempt one submission call
+  const attempt = async () => renewal.submit({ emp_id: empId, sum_insured: si, terms_accepted: true });
+
   try {
-    const r = await renewal.submit({ emp_id: empId, sum_insured: si, terms_accepted: true });
+    const r = await attempt();
     showToast('✅ Renewal submitted!', 'success');
-    renewalState.eligibility.existing_renewal = { enrollment_id: r.enrollment_id, enrollment_status: 'SUBMITTED', submitted_at: new Date().toISOString() };
+    renewalState.eligibility.existing_renewal = {
+      enrollment_id: r.enrollment_id,
+      enrollment_status: 'SUBMITTED',
+      submitted_at: new Date().toISOString(),
+    };
     renderRenewalAlreadySubmitted(renewalState.eligibility);
   } catch (e) {
-    showToast(e.message, 'error');
+    const msg = (e.message || '').toLowerCase();
+
+    // ✅ FIX: Detect Render cold-start 500 — auto-retry once after 2 s
+    if (msg.includes('500') || msg.includes('failed to load resource') || msg.includes('temporary')) {
+      if (btn) btn.textContent = '⏳ Retrying…';
+      showToast('⏳ Server is warming up — retrying in 2 seconds…', 'info');
+      await new Promise(r => setTimeout(r, 2000));
+      try {
+        const r2 = await attempt();
+        showToast('✅ Renewal submitted!', 'success');
+        renewalState.eligibility.existing_renewal = {
+          enrollment_id: r2.enrollment_id,
+          enrollment_status: 'SUBMITTED',
+          submitted_at: new Date().toISOString(),
+        };
+        renderRenewalAlreadySubmitted(renewalState.eligibility);
+        return;                           // success on retry — exit before resetting btn
+      } catch (e2) {
+        const msg2 = (e2.message || '').toLowerCase();
+        // If retry returns "already submitted" the first attempt actually succeeded
+        if (msg2.includes('already submitted')) {
+          showToast('✅ Renewal was already recorded successfully.', 'success');
+          setTimeout(() => renderRenewalPage(), 1500);
+          return;
+        }
+        showToast('❌ ' + e2.message, 'error');
+      }
+    }
+    // Already submitted — first attempt silently succeeded despite the 500
+    else if (msg.includes('already submitted')) {
+      showToast('✅ Your renewal was already submitted successfully.', 'success');
+      setTimeout(() => renderRenewalPage(), 1500);
+      return;
+    }
+    // Validation error from backend (mobile / email)
+    else if (msg.includes('mobile') || msg.includes('email') || msg.includes('validation')) {
+      showToast('❌ Profile error: ' + e.message + '\nPlease contact HR.', 'error');
+    }
+    // Renewal window closed
+    else if (msg.includes('window') || msg.includes('closed')) {
+      showToast('❌ Renewal window has closed. ' + e.message, 'error');
+    }
+    else {
+      showToast('❌ ' + e.message, 'error');
+    }
+
+    // Reset button for all non-success paths
     if (btn) { btn.disabled = false; btn.textContent = '✅ Submit Renewal'; }
   } finally {
     renewalState.submitting = false;
@@ -5542,126 +5656,6 @@ window.renewalState         = renewalState;
 // ═══════════════════════════════════════════════════════════════════════════════
 // ─── ADMIN: Renewal Progress Dashboard ────────────────────────────────────────
 // ═══════════════════════════════════════════════════════════════════════════════
-
-// ─── RENEWAL WINDOW CONTROL HELPERS ───────────────────────────────────────────
-
-// Load renewal window config from backend API
-async function loadRenewalWindowConfig() {
-  try {
-    const res = await apiFetch('/api/renewal/window-config', { method: 'GET' });
-    return res.data || {};
-  } catch (err) {
-    console.error('Error loading window config:', err);
-    return { window_open: true };
-  }
-}
-
-// Toggle window open/close
-async function adminToggleRenewalWindow(openStatus) {
-  try {
-    const res = await apiFetch('/api/renewal/window-config', {
-      method: 'POST',
-      body: { window_open: openStatus }
-    });
-    
-    if (res.error) {
-      showToast('❌ ' + res.error, 'error');
-      return;
-    }
-
-    showToast(openStatus ? '✅ Enrollment OPENED' : '⛔ Enrollment CLOSED', 'success');
-    setTimeout(() => loadAndDisplayWindowStatus(), 500);
-    
-  } catch (err) {
-    showToast('❌ Error: ' + err.message, 'error');
-  }
-}
-
-// Update deadline
-async function adminUpdateDeadline() {
-  try {
-    const newDeadline = document.getElementById('deadline-date-input').value;
-    
-    const res = await apiFetch('/api/renewal/window-config', {
-      method: 'POST',
-      body: { deadline_date: newDeadline }
-    });
-    
-    if (res.error) {
-      showToast('❌ ' + res.error, 'error');
-      return;
-    }
-
-    showToast('✅ Deadline updated', 'success');
-    setTimeout(() => loadAndDisplayWindowStatus(), 500);
-    
-  } catch (err) {
-    showToast('❌ Error: ' + err.message, 'error');
-  }
-}
-
-// Toggle re-submission
-async function adminToggleResubmit() {
-  try {
-    const allowResubmit = document.getElementById('allow-resubmit-checkbox').checked;
-    
-    const res = await apiFetch('/api/renewal/window-config', {
-      method: 'POST',
-      body: { allow_resubmit: allowResubmit }
-    });
-    
-    if (res.error) {
-      showToast('❌ ' + res.error, 'error');
-      return;
-    }
-
-    showToast(allowResubmit ? '✅ Re-submission ALLOWED' : '✅ Re-submission BLOCKED', 'success');
-    
-  } catch (err) {
-    showToast('❌ Error: ' + err.message, 'error');
-  }
-}
-
-// Load and display current window status
-async function loadAndDisplayWindowStatus() {
-  const config = await loadRenewalWindowConfig();
-
-  // Update status display
-  const statusDiv = document.getElementById('window-status-display');
-  if (statusDiv) {
-    const statusBadge = config.window_open 
-      ? '<span style="background:#28a745;color:white;padding:4px 12px;border-radius:4px;">✅ OPEN</span>'
-      : '<span style="background:#dc3545;color:white;padding:4px 12px;border-radius:4px;">⛔ CLOSED</span>';
-    
-    statusDiv.innerHTML = `
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px">
-        <div><strong>Status:</strong><br>${statusBadge}</div>
-        <div><strong>Deadline:</strong><br>${config.deadline_date ? new Date(config.deadline_date).toLocaleDateString() : '—'}</div>
-        <div><strong>Re-submit:</strong><br>${config.allow_resubmit ? '✅ Allowed' : '❌ Not allowed'}</div>
-        <div><strong>Updated:</strong><br><small>${config.updated_at ? new Date(config.updated_at).toLocaleString() : '—'}</small></div>
-      </div>
-    `;
-  }
-
-  // Update form fields
-  if (document.getElementById('deadline-date-input')) {
-    document.getElementById('deadline-date-input').value = 
-      config.deadline_date ? config.deadline_date.split('T')[0] : '2026-07-15';
-  }
-  
-  if (document.getElementById('allow-resubmit-checkbox')) {
-    document.getElementById('allow-resubmit-checkbox').checked = config.allow_resubmit || false;
-  }
-
-  // Disable buttons if state matches
-  const openBtn = document.getElementById('open-window-btn');
-  const closeBtn = document.getElementById('close-window-btn');
-  if (openBtn && closeBtn) {
-    openBtn.disabled = config.window_open;
-    closeBtn.disabled = !config.window_open;
-  }
-}
-
 async function renderAdminRenewalProgress() {
   const c = document.getElementById('content');
   c.innerHTML = `<div class="loading"><div class="spinner"></div> Loading renewal progress…</div>`;
@@ -5679,31 +5673,6 @@ async function renderAdminRenewalProgress() {
       <div class="stat-card green"><div class="stat-icon">✅</div><div class="stat-label">Submitted</div><div class="stat-value">${t.submitted || 0}</div><div class="stat-sub">${t.progress_percent || 0}%</div></div>
       <div class="stat-card amber"><div class="stat-icon">👀</div><div class="stat-label">Visited / Not Submitted</div><div class="stat-value">${t.visited_not_submitted || 0}</div></div>
       <div class="stat-card purple"><div class="stat-icon">🚪</div><div class="stat-label">Never Logged In</div><div class="stat-value">${t.never_logged_in || 0}</div></div>
-    </div>
-
-    <!-- ✅ RENEWAL WINDOW CONTROL PANEL -->
-    <div style="background:white;border:2px solid #0066cc;border-radius:14px;padding:20px;margin-bottom:16px">
-      <h3 style="margin:0 0 16px 0;color:#0066cc">🔄 Renewal Window Control</h3>
-      <div id="window-status-display" style="background:#f8f9fa;padding:12px;border-radius:8px;margin-bottom:16px">Loading status…</div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px">
-        <button class="btn btn-success" id="open-window-btn" onclick="adminToggleRenewalWindow(true)" style="padding:12px;font-weight:bold">✅ OPEN Enrollment</button>
-        <button class="btn btn-danger" id="close-window-btn" onclick="adminToggleRenewalWindow(false)" style="padding:12px;font-weight:bold">⛔ CLOSE Enrollment</button>
-      </div>
-      <div style="display:grid;grid-template-columns:1fr 120px;gap:10px;margin-bottom:16px">
-        <div>
-          <label style="display:block;margin-bottom:4px;font-weight:bold;font-size:13px">Deadline Date</label>
-          <input type="date" id="deadline-date-input" value="2026-07-15" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px">
-        </div>
-        <div style="display:flex;align-items:flex-end">
-          <button class="btn btn-primary" onclick="adminUpdateDeadline()" style="width:100%;padding:8px">Update</button>
-        </div>
-      </div>
-      <div style="padding:12px;background:#f8f9fa;border-radius:8px">
-        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin:0">
-          <input type="checkbox" id="allow-resubmit-checkbox" onchange="adminToggleResubmit()" style="width:18px;height:18px;cursor:pointer">
-          <span><strong>Allow employees to re-submit enrollment</strong></span>
-        </label>
-      </div>
     </div>
 
     <div style="background:white;border:1px solid var(--border);border-radius:14px;padding:16px;margin-bottom:16px">
@@ -5738,9 +5707,7 @@ async function renderAdminRenewalProgress() {
   `;
 
   window._admRenewalRows = rows;
-  setTimeout(() => loadAndDisplayWindowStatus(), 500);
 }
-
 
 function adminRenewalRow(r) {
   const stageBadge = {
@@ -5794,14 +5761,7 @@ async function adminRenewalTogglePause(empId, paused) {
   } catch (e) { showToast(e.message, 'error'); }
 }
 
-// Register all functions
-window.loadRenewalWindowConfig     = loadRenewalWindowConfig;
-window.adminToggleRenewalWindow    = adminToggleRenewalWindow;
-window.adminUpdateDeadline         = adminUpdateDeadline;
-window.adminToggleResubmit         = adminToggleResubmit;
-window.loadAndDisplayWindowStatus  = loadAndDisplayWindowStatus;
-window.renderAdminRenewalProgress  = renderAdminRenewalProgress;
-window.adminRenewalFilter          = adminRenewalFilter;
-window.adminRenewalRemind          = adminRenewalRemind;
-window.adminRenewalTogglePause     = adminRenewalTogglePause;
-
+window.renderAdminRenewalProgress = renderAdminRenewalProgress;
+window.adminRenewalFilter         = adminRenewalFilter;
+window.adminRenewalRemind         = adminRenewalRemind;
+window.adminRenewalTogglePause    = adminRenewalTogglePause;
