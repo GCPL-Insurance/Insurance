@@ -3886,59 +3886,123 @@ async function renderEmployeeDashboardV2() {
   try { result = await views.employeeFull(empId); }
   catch(e) { c.innerHTML = `<div class="empty-state"><div class="icon">⚠️</div>${e.message}</div>`; return; }
 
-  const data   = result?.data || {};
-  const emp    = data.employees?.[0];
-  // ✅ BUG FIX: Insured Members shown on the dashboard must come from the latest
-  // SUBMITTED or APPROVED GMC enrollment (employee_gmc_enrollment_insured), not the
-  // raw insurance_dependents table. The old code only saw the employee themself.
-  const allEnrolls = data.employee_gmc_enrollment || [];
-  // pick latest non-DRAFT enrollment (prefer APPROVED > SUBMITTED, then newest)
-  const enroll = allEnrolls
-    .slice()
-    .sort((a, b) => {
-      const rank = (s) => s === 'APPROVED' ? 3 : s === 'SUBMITTED' ? 2 : s === 'REJECTED' ? 1 : 0;
-      const r = rank(b.enrollment_status) - rank(a.enrollment_status);
-      if (r !== 0) return r;
-      return new Date(b.updated_at || b.submitted_at || 0) - new Date(a.updated_at || a.submitted_at || 0);
-    })[0] || allEnrolls[0];
+  const data = result?.data || {};
+  const emp  = data.employees?.[0] || {};
 
-  // Insured members for THIS enrollment
-  const insuredAll = data.employee_gmc_enrollment_insured || [];
-  const insuredMembers = enroll
-    ? insuredAll.filter(m => m.enrollment_id === enroll.enrollment_id)
-    : [];
-  // Fallback raw dependents (only used as a secondary list if no submitted enrollment)
-  const rawDeps  = data.insurance_dependents || [];
-  const claims = data.employee_gmc_claims || [];
-  const fins   = data.employee_gmc_financials_25_26?.[0];
+  // ═══════════════════════════════════════════════════════════════════════════
+  // CLEAR DATA MODEL (3 mutually-aware sources):
+  //  1. insurance_dependents          → 25-26 FINAL data (existing employees)
+  //  2. employee_gmc_enrollment_insured → GMC enrollment (NEW JOINEES only)
+  //  3. renewal_enrollment_insured_2026_27 → 2026-27 Renewal submission
+  //
+  // KEY RULE: If insurance_dependents EXISTS → that is final → HIDE gmc_enrollment
+  //           If insurance_dependents EMPTY  → new joinee   → SHOW gmc_enrollment
+  // ═══════════════════════════════════════════════════════════════════════════
+  const insDeps      = data.insurance_dependents || [];
+  const gmcInsured   = data.employee_gmc_enrollment_insured || [];
+  const renewalInsured = data.renewal_enrollment_insured_2026_27 || [];
 
-  // For the "Insured Dependents" panel we show insured members from the submitted
-  // enrollment if it exists; otherwise we fall back to the raw dependents list.
-  const deps = insuredMembers.length ? insuredMembers : rawDeps;
-  const memberCount = enroll
-    ? insuredMembers.length                            // submitted enrollment → exact count incl. self
-    : (rawDeps.length + 1);                            // no enrollment → self + dependents on file
+  const gmcEnrolls   = data.employee_gmc_enrollment || [];
+  const renewalEnrolls = data.renewal_enrollment_2026_27 || [];
+  const claims       = data.employee_gmc_claims || [];
+  const balance      = data.vw_employee_net_balance_2025_26?.[0] || {};
 
-  // ctc_gmc_per_month comes exclusively from employees table
-  const ctcGmcVal = emp?.ctc_gmc_per_month ?? null;
+  // Determine employee type
+  const isExistingEmployee = insDeps.length > 0;   // has 25-26 insurance data
+  const isNewJoinee        = !isExistingEmployee;   // relies on GMC enrollment
 
-  const fmtCurr = (v) => v ? '₹' + Number(v).toLocaleString('en-IN') : '—';
-  // fmtDate() is the module-level function defined below — no local redefinition needed
+  // Latest GMC enrollment (for new joinees)
+  const latestGmcEnroll = gmcEnrolls.slice().sort((a, b) => {
+    const rank = (s) => s === 'APPROVED' ? 3 : s === 'SUBMITTED' ? 2 : s === 'REJECTED' ? 1 : 0;
+    const r = rank(b.enrollment_status) - rank(a.enrollment_status);
+    if (r !== 0) return r;
+    return new Date(b.updated_at || b.submitted_at || 0) - new Date(a.updated_at || a.submitted_at || 0);
+  })[0];
 
-  const statusColor = { active:'badge-green', exit:'badge-red', Active:'badge-green', Exit:'badge-red' };
+  // Latest renewal enrollment
+  const latestRenewal = renewalEnrolls.slice().sort((a, b) =>
+    new Date(b.submitted_at || b.updated_at || 0) - new Date(a.submitted_at || a.updated_at || 0)
+  )[0];
+
+  const fmtCurr = (v) => (v != null && v !== '' && !isNaN(Number(v))) ? '₹' + Number(v).toLocaleString('en-IN') : '—';
+
+  // ── Determine the ACTIVE sum insured (single source of truth) ──────────────
+  let activeSumInsured = null;
+  if (isExistingEmployee) {
+    activeSumInsured = Math.max(...insDeps.map(d => Number(d.sum_insured || 0)));
+  } else if (latestGmcEnroll?.selected_sum_insured) {
+    activeSumInsured = Number(latestGmcEnroll.selected_sum_insured);
+  }
+
+  // ── Status badge helper ─────────────────────────────────────────────────────
+  const statusBadge = (status) => {
+    const map = {
+      'SUBMITTED': 'badge-blue', 'APPROVED': 'badge-green', 'DRAFT': 'badge-amber',
+      'REJECTED': 'badge-red', 'PENDING': 'badge-amber', 'NOT_APPLICABLE': 'badge-gray',
+      'ACTIVE': 'badge-green',
+    };
+    const label = {
+      'SUBMITTED': 'Submitted', 'APPROVED': 'Approved', 'DRAFT': 'Pending',
+      'REJECTED': 'Rejected', 'PENDING': 'Pending', 'NOT_APPLICABLE': 'Not Applicable',
+      'ACTIVE': 'Active',
+    };
+    return `<span class="badge ${map[status] || 'badge-gray'}">${label[status] || status}</span>`;
+  };
+
+  // ── Member card renderer ────────────────────────────────────────────────────
+  const memberCard = (m, opts = {}) => {
+    const relIcons = { Self:'👤', Spouse:'💑', Son:'👦', Daughter:'👧', Father:'👨', Mother:'👩', 'Father-in-Law':'👴', 'Mother-in-Law':'👵' };
+    const rel = m.relationship || m.relation || '';
+    const name = m.insured_name || m.dependent_name || m.member_name || '—';
+    return `<div class="dep-card">
+      <div class="dep-icon">${relIcons[rel] || '👤'}</div>
+      <div>
+        <div class="dep-name">${name}</div>
+        <div class="dep-meta">${rel}${m.date_of_birth ? ' · DOB: ' + fmtDate(m.date_of_birth) : ''}</div>
+        ${m.sum_insured ? `<div class="dep-meta">Sum Insured: ${fmtCurr(m.sum_insured)}</div>` : ''}
+        ${m.annual_premium ? `<div class="dep-meta">Premium: ${fmtCurr(m.annual_premium)}</div>` : ''}
+      </div>
+    </div>`;
+  };
+
+  // ── Section renderer (used for all 3 data sources) ──────────────────────────
+  const renderSection = (title, icon, status, members, note, isApplicable) => {
+    if (!isApplicable) {
+      return `
+        <div style="background:white;border:1px solid var(--border);border-radius:14px;padding:18px;margin-bottom:16px;opacity:0.6">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <div style="font-weight:700;font-size:14px">${icon} ${title}</div>
+            ${statusBadge('NOT_APPLICABLE')}
+          </div>
+          <div style="font-size:12px;color:var(--text3);margin-top:8px">${note || 'Not applicable for your profile.'}</div>
+        </div>`;
+    }
+    return `
+      <div style="background:white;border:1px solid var(--border);border-radius:14px;padding:18px;margin-bottom:16px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+          <div style="font-weight:700;font-size:14px">${icon} ${title}</div>
+          ${statusBadge(status)}
+        </div>
+        ${note ? `<div style="font-size:12px;color:var(--text2);margin-bottom:10px">${note}</div>` : ''}
+        ${members.length === 0
+          ? `<div style="padding:16px;text-align:center;color:var(--text3);font-size:13px">No members recorded.</div>`
+          : `<div class="dep-cards-grid">${members.map(m => memberCard(m)).join('')}</div>`
+        }
+      </div>`;
+  };
 
   c.innerHTML = `
     <!-- Profile Banner -->
     <div class="emp-profile-card">
-      <div class="emp-avatar">${(emp?.emp_name || state.userName || '?')[0].toUpperCase()}</div>
+      <div class="emp-avatar">${(emp.emp_name || state.userName || '?')[0].toUpperCase()}</div>
       <div class="emp-profile-info">
-        <div class="emp-profile-name">${emp?.emp_name || state.userName}</div>
-        <div class="emp-profile-meta">${emp?.designation || ''} ${emp?.department ? '· ' + emp.department : ''} ${emp?.unit ? '· ' + emp.unit : ''}</div>
+        <div class="emp-profile-name">${emp.emp_name || state.userName}</div>
+        <div class="emp-profile-meta">${emp.designation || ''} ${emp.department ? '· ' + emp.department : ''} ${emp.unit ? '· ' + emp.unit : ''}</div>
         <div class="emp-stats-row">
           <div class="emp-stat-chip"><span>ID</span>${empId}</div>
-          <div class="emp-stat-chip"><span>DOJ</span>${fmtDate(emp?.date_of_joining)}</div>
-          ${emp?.status ? `<div class="emp-stat-chip"><span>Status</span>${emp.status}</div>` : ''}
-          ${enroll?.enrollment_status ? `<div class="emp-stat-chip"><span>GMC</span>${enroll.enrollment_status}</div>` : ''}
+          <div class="emp-stat-chip"><span>DOJ</span>${fmtDate(emp.date_of_joining)}</div>
+          ${emp.status ? `<div class="emp-stat-chip"><span>Status</span>${emp.status}</div>` : ''}
+          <div class="emp-stat-chip"><span>Type</span>${isExistingEmployee ? 'Existing' : 'New Joinee'}</div>
         </div>
       </div>
     </div>
@@ -3948,14 +4012,14 @@ async function renderEmployeeDashboardV2() {
       <div class="stat-card blue">
         <div class="stat-icon">🏥</div>
         <div class="stat-label">Sum Insured</div>
-        <div class="stat-value" style="font-size:18px">${enroll?.selected_sum_insured ? fmtCurr(enroll.selected_sum_insured) : '—'}</div>
+        <div class="stat-value" style="font-size:18px">${fmtCurr(activeSumInsured)}</div>
         <div class="stat-sub">Family Floater</div>
       </div>
       <div class="stat-card green">
         <div class="stat-icon">👨‍👩‍👧</div>
-        <div class="stat-label">Insured Members</div>
-        <div class="stat-value">${memberCount}</div>
-        <div class="stat-sub">${enroll ? `From ${enroll.enrollment_status} enrollment` : `Self + ${rawDeps.length} dependent(s)`}</div>
+        <div class="stat-label">25-26 Closing Balance</div>
+        <div class="stat-value" style="font-size:16px;color:${Number(balance.net_balance||0)>=0?'#15803d':'#b91c1c'}">${fmtCurr(balance.net_balance)}</div>
+        <div class="stat-sub">${Number(balance.net_balance||0)>=0?'Refundable':'Recovery'}</div>
       </div>
       <div class="stat-card purple">
         <div class="stat-icon">🏨</div>
@@ -3964,10 +4028,10 @@ async function renderEmployeeDashboardV2() {
         <div class="stat-sub">Filed under GMC</div>
       </div>
       <div class="stat-card amber">
-        <div class="stat-icon">💳</div>
-        <div class="stat-label">Net Position</div>
-        <div class="stat-value" style="font-size:16px">${fins?.net_employee_position != null ? fmtCurr(fins.net_employee_position) : '—'}</div>
-        <div class="stat-sub">Employee deduction</div>
+        <div class="stat-icon">🔄</div>
+        <div class="stat-label">2026-27 Renewal</div>
+        <div class="stat-value" style="font-size:16px">${latestRenewal ? (latestRenewal.enrollment_status === 'SUBMITTED' ? 'Submitted' : latestRenewal.enrollment_status) : 'Pending'}</div>
+        <div class="stat-sub">Renewal status</div>
       </div>
     </div>
 
@@ -3977,80 +4041,72 @@ async function renderEmployeeDashboardV2() {
       <div class="info-panel-sub">Use <b>Correction Concerns</b> in the sidebar to raise a request to HR.</div>
     </div>
 
-    <!-- Personal & Employment Details -->
-    <div class="detail-cards">
+    <!-- Basic Details -->
+    <div class="detail-cards" style="margin-bottom:24px">
       <div class="detail-card">
         <div class="detail-card-title">👤 Personal Details</div>
         <div class="detail-item"><span class="detail-key">Emp ID</span><span class="detail-val"><code>${empId}</code></span></div>
-        <div class="detail-item"><span class="detail-key">Full Name</span><span class="detail-val">${emp?.emp_name||'—'}</span></div>
-        <div class="detail-item"><span class="detail-key">Gender</span><span class="detail-val">${emp?.gender||'—'}</span></div>
-        <div class="detail-item"><span class="detail-key">Date of Birth</span><span class="detail-val">${fmtDate(emp?.date_of_birth)}</span></div>
-        <div class="detail-item"><span class="detail-key">Status</span><span class="detail-val"><span class="badge ${statusColor[emp?.status]||'badge-blue'}">${emp?.status||'—'}</span></span></div>
+        <div class="detail-item"><span class="detail-key">Full Name</span><span class="detail-val">${emp.emp_name||'—'}</span></div>
+        <div class="detail-item"><span class="detail-key">Gender</span><span class="detail-val">${emp.gender||'—'}</span></div>
+        <div class="detail-item"><span class="detail-key">Date of Birth</span><span class="detail-val">${fmtDate(emp.date_of_birth)}</span></div>
+        <div class="detail-item"><span class="detail-key">Mobile</span><span class="detail-val">${emp.mobile_number||'—'}</span></div>
+        <div class="detail-item"><span class="detail-key">Email</span><span class="detail-val" style="font-size:11px">${emp.email_id||'—'}</span></div>
       </div>
       <div class="detail-card">
         <div class="detail-card-title">🏢 Employment Details</div>
-        <div class="detail-item"><span class="detail-key">Department</span><span class="detail-val">${emp?.department||'—'}</span></div>
-        <div class="detail-item"><span class="detail-key">Designation</span><span class="detail-val">${emp?.designation||'—'}</span></div>
-        <div class="detail-item"><span class="detail-key">Unit</span><span class="detail-val">${emp?.unit||'—'}</span></div>
-        <div class="detail-item"><span class="detail-key">Date of Joining</span><span class="detail-val">${fmtDate(emp?.date_of_joining)}</span></div>
-        <div class="detail-item">
-          <span class="detail-key">CTC GMC/Month</span>
-          <span class="detail-val" id="dash-ctc-display">
-            ${ctcGmcVal != null && ctcGmcVal > 0 ? fmtCurr(ctcGmcVal) : '<span style="color:#f59e0b;font-size:12px">Not set</span>'}
-            <button onclick="showCtcEditModal()" style="margin-left:8px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;padding:2px 8px;font-size:11px;color:#1d4ed8;cursor:pointer">✏️ Update</button>
-          </span>
-        </div>
+        <div class="detail-item"><span class="detail-key">Department</span><span class="detail-val">${emp.department||'—'}</span></div>
+        <div class="detail-item"><span class="detail-key">Designation</span><span class="detail-val">${emp.designation||'—'}</span></div>
+        <div class="detail-item"><span class="detail-key">Unit</span><span class="detail-val">${emp.unit||'—'}</span></div>
+        <div class="detail-item"><span class="detail-key">Date of Joining</span><span class="detail-val">${fmtDate(emp.date_of_joining)}</span></div>
+        <div class="detail-item"><span class="detail-key">GMC Inclusion</span><span class="detail-val">${fmtDate(emp.gmc_inclusion_date)}</span></div>
+        <div class="detail-item"><span class="detail-key">CTC GMC/Month</span><span class="detail-val">${fmtCurr(emp.ctc_gmc_per_month)}</span></div>
       </div>
-      <div class="detail-card">
-        <div class="detail-card-title">🏥 GMC Enrollment</div>
-        <div class="detail-item"><span class="detail-key">Status</span><span class="detail-val">${enroll?.enrollment_status ? `<span class="badge badge-blue">${enroll.enrollment_status}</span>` : '—'}</span></div>
-        <div class="detail-item"><span class="detail-key">Sum Insured</span><span class="detail-val">${fmtCurr(enroll?.selected_sum_insured)}</span></div>
-        <div class="detail-item"><span class="detail-key">GMC Effective</span><span class="detail-val">${fmtDate(emp?.gmc_effective_date)}</span></div>
-        <div class="detail-item"><span class="detail-key">Mobile</span><span class="detail-val">${enroll?.mobile_number||'—'}</span></div>
-        <div class="detail-item"><span class="detail-key">Email</span><span class="detail-val" style="font-size:11px">${enroll?.email_id||'—'}</span></div>
-      </div>
-      ${fins ? `
       <div class="detail-card">
         <div class="detail-card-title">💰 GMC Financials 2025-26</div>
-        <div class="detail-item"><span class="detail-key">Total Premium</span><span class="detail-val">${fmtCurr(fins.total_premium)}</span></div>
-        <div class="detail-item"><span class="detail-key">Total CTC GMC</span><span class="detail-val">${fmtCurr(fins.total_ctc_gmc)}</span></div>
-        <div class="detail-item"><span class="detail-key">Opening Balance</span><span class="detail-val">${fmtCurr(fins.opening_balance)}</span></div>
-        <div class="detail-item"><span class="detail-key">Net Position</span><span class="detail-val" style="color:${Number(fins.net_employee_position)>0?'var(--danger)':'var(--hr)'}">${fmtCurr(fins.net_employee_position)}</span></div>
-        <div class="detail-item"><span class="detail-key">Refund/Deduction</span><span class="detail-val">${fmtCurr(fins.ctc_gmc_refund)}</span></div>
-      </div>` : ''}
+        <div class="detail-item"><span class="detail-key">Total CTC GMC</span><span class="detail-val">${fmtCurr(balance.total_ctc_gmc)}</span></div>
+        <div class="detail-item"><span class="detail-key">Opening Balance</span><span class="detail-val">${fmtCurr(balance.opening_balance_24_25)}</span></div>
+        <div class="detail-item"><span class="detail-key">Total Premium</span><span class="detail-val">${fmtCurr(balance.total_premium)}</span></div>
+        <div class="detail-item"><span class="detail-key">Salary Deducted</span><span class="detail-val">${fmtCurr(balance.salary_gmc_deducted)}</span></div>
+        <div class="detail-item"><span class="detail-key">Net Balance</span><span class="detail-val" style="color:${Number(balance.net_balance||0)>=0?'#15803d':'#b91c1c'};font-weight:700">${fmtCurr(balance.net_balance)}</span></div>
+      </div>
     </div>
 
-    <!-- Dependents -->
-    <div style="font-size:15px;font-weight:700;margin-bottom:12px;color:#0f172a">👨‍👩‍👧 Insured Members ${enroll ? `<span style="font-size:11px;font-weight:500;color:var(--text3)">· from ${enroll.enrollment_status} enrollment</span>` : ''}</div>
-    ${deps.length === 0
-      ? '<div class="empty-state" style="padding:20px;border-radius:14px;background:white;border:1px solid var(--border);margin-bottom:20px"><div class="icon">📭</div>No insured members on record. Complete your GMC enrollment to add members.</div>'
-      : `<div class="dep-cards-grid" style="margin-bottom:20px">
-        ${deps.map(d => {
-          const relIcons = { Self:'👤', Spouse:'💑', Son:'👦', Daughter:'👧', Father:'👨', Mother:'👩', 'Father-in-Law':'👴', 'Mother-in-Law':'👵' };
-          const hasStatus = 'status' in d;  // insurance_dependents has it; enrollment_insured doesn't
-          return `<div class="dep-card">
-            <div class="dep-icon">${relIcons[d.relationship]||'👤'}</div>
-            <div>
-              <div class="dep-name">${d.insured_name||'—'}</div>
-              <div class="dep-meta">${d.relationship||''} · DOB: ${fmtDate(d.date_of_birth)}</div>
-              <div class="dep-meta">Sum Insured: ${fmtCurr(d.sum_insured)}</div>
-              ${d.annual_premium ? `<div class="dep-meta">Annual Premium: ${fmtCurr(d.annual_premium)}</div>` : ''}
-              <div style="margin-top:6px">${hasStatus
-                ? `<span class="badge ${d.status==='A'?'badge-green':'badge-red'}">${d.status==='A'?'Active':'Inactive'}</span>`
-                : `<span class="badge badge-green">Covered</span>`}</div>
-            </div>
-          </div>`;
-        }).join('')}
-      </div>`
-    }
+    <!-- ═══ 3 INSURANCE DATA SECTIONS ═══ -->
+    <div style="font-size:16px;font-weight:700;margin-bottom:14px;color:#0f172a">🛡️ Insurance Coverage Summary</div>
+
+    ${renderSection(
+      '2025-26 Insurance (Final)', '📋',
+      'ACTIVE',
+      insDeps.map(d => ({ ...d, relationship: d.relationship, insured_name: d.dependent_name || d.insured_name })),
+      isExistingEmployee ? `Your finalized 2025-26 policy with ${insDeps.length} member(s).` : null,
+      isExistingEmployee
+    )}
+
+    ${renderSection(
+      'GMC Enrollment (New Joinee)', '🆕',
+      latestGmcEnroll?.enrollment_status || 'PENDING',
+      gmcInsured.filter(m => !latestGmcEnroll || m.enrollment_id === latestGmcEnroll.enrollment_id),
+      isNewJoinee ? 'Your new-joinee GMC enrollment.' : 'You are an existing employee — your 2025-26 insurance above is final.',
+      isNewJoinee  // ✅ KEY RULE: Only show if NOT existing employee
+    )}
+
+    ${renderSection(
+      '2026-27 Renewal', '🔄',
+      latestRenewal?.enrollment_status || 'PENDING',
+      renewalInsured.filter(m => !latestRenewal || m.enrollment_id === latestRenewal.enrollment_id),
+      latestRenewal
+        ? `Renewal submitted on ${fmtDate(latestRenewal.submitted_at)}.`
+        : 'Renewal not yet submitted. Use "GMC Renewal 2026-27" in the sidebar.',
+      true  // Renewal section always shown
+    )}
 
     <!-- Claims -->
-    <div style="font-size:15px;font-weight:700;margin-bottom:12px;color:#0f172a">🏥 GMC Claims</div>
+    <div style="font-size:15px;font-weight:700;margin:24px 0 12px;color:#0f172a">🏥 GMC Claims</div>
     ${claims.length === 0
-      ? '<div class="empty-state" style="padding:20px;border-radius:14px;background:white;border:1px solid var(--border);margin-bottom:20px"><div class="icon">📭</div>No claims on record</div>'
-      : `<div class="table-wrap" style="margin-bottom:20px"><div style="overflow-x:auto">
+      ? '<div class="empty-state" style="padding:20px;border-radius:14px;background:white;border:1px solid var(--border)"><div class="icon">📭</div>No claims on record</div>'
+      : `<div class="table-wrap"><div style="overflow-x:auto">
         <table class="data-table">
-          <thead><tr><th>Claim ID</th><th>Beneficiary</th><th>Hospital</th><th>Admission</th><th>Claim Amt</th><th>Approved</th><th>Stage</th><th>Status</th></tr></thead>
+          <thead><tr><th>Claim ID</th><th>Beneficiary</th><th>Hospital</th><th>Admission</th><th>Claim Amt</th><th>Approved</th><th>Status</th></tr></thead>
           <tbody>
             ${claims.map(cl=>`<tr>
               <td><code>${cl.claim_id||'—'}</code></td>
@@ -4059,7 +4115,6 @@ async function renderEmployeeDashboardV2() {
               <td>${fmtDate(cl.date_of_admission)}</td>
               <td>${cl.claim_amount ? fmtCurr(cl.claim_amount) : '—'}</td>
               <td>${cl.claim_approved_amount ? fmtCurr(cl.claim_approved_amount) : '—'}</td>
-              <td><span class="badge badge-blue">${cl.claim_stage||'—'}</span></td>
               <td><span class="badge badge-amber">${cl.claim_status||'—'}</span></td>
             </tr>`).join('')}
           </tbody>
@@ -5309,7 +5364,7 @@ function renderRenewalStep3() {
   const elig    = renewalState.eligibility;
   const options = elig.available_sum_insured || [];
   const current = elig.current_sum_insured;
-  const deps    = renewalState.dependents;
+  const deps    = Array.isArray(renewalState.dependents) ? renewalState.dependents : [];
 
   return `
     <div style="background:white;border:1px solid var(--border);border-radius:14px;padding:24px">
@@ -5432,19 +5487,21 @@ async function refreshRenewalQuote() {
 }
 
 function renderRenewalSummary(q) {
+  // ✅ FIX: Defensive guard — members must be an array
+  const members = Array.isArray(q.members) ? q.members : [];
   const negNet = (q.salary_deduction_26_27 || 0) > 0;
   return `
     <div style="font-weight:700;font-size:14px;margin-bottom:10px">③ Live Summary — Premium & Settlement</div>
 
     <div style="background:white;border-radius:8px;padding:12px;margin-bottom:10px">
-      <div style="font-size:12px;color:var(--text2);margin-bottom:6px"><b>Insured Members (${q.members.length})</b></div>
+      <div style="font-size:12px;color:var(--text2);margin-bottom:6px"><b>Insured Members (${members.length})</b></div>
       <table style="width:100%;font-size:13px;border-collapse:collapse">
         <thead><tr style="background:var(--surface2);text-align:left">
           <th style="padding:6px 8px">Name</th><th style="padding:6px 8px">Relation</th>
           <th style="padding:6px 8px">Age</th><th style="padding:6px 8px;text-align:right">Annual Premium</th>
         </tr></thead>
         <tbody>
-          ${q.members.map(m => `<tr style="border-top:1px solid #e5e7eb">
+          ${members.map(m => `<tr style="border-top:1px solid #e5e7eb">
             <td style="padding:6px 8px">${m.member_name}</td>
             <td style="padding:6px 8px">${m.relation}</td>
             <td style="padding:6px 8px">${m.age_at_policy_start}</td>

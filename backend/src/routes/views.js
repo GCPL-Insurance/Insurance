@@ -71,6 +71,7 @@ router.get('/employee-full/:empId', async (req, res) => {
     { name: 'employee_blood_group',           col: 'emp_id' },
     { name: 'insurance_dependents',           col: 'emp_id' },
     { name: 'employee_gmc_enrollment',        col: 'emp_id' },
+    { name: 'employee_gmc_enrollment_insured', col: 'emp_id' },  // ✅ ADDED: GMC enrollment insured members
     { name: 'employee_gmc_claims',            col: 'emp_id' },
     { name: 'employee_ctc_gmc_increment',     col: 'emp_id' },
     { name: 'employee_gmc_actual_deduction',  col: 'emp_id' },
@@ -81,6 +82,8 @@ router.get('/employee-full/:empId', async (req, res) => {
     { name: 'employee_gmc_net_balance',       col: 'emp_id' },
     { name: 'employee_gmc_opening_balance',   col: 'emp_id' },
     { name: 'insurance_enrollment_manual',    col: 'emp_id' },
+    { name: 'renewal_enrollment_2026_27',     col: 'emp_id' },           // ✅ ADDED: renewal enrollment
+    { name: 'renewal_enrollment_insured_2026_27', col: 'emp_id' },       // ✅ ADDED: renewal insured members
   ];
 
   const views = [
@@ -93,6 +96,7 @@ router.get('/employee-full/:empId', async (req, res) => {
     'vw_ff_base_employees', 'vw_ff_ctc_gmc_total', 'vw_ff_emi_recovered',
     'vw_ff_insurance_days', 'vw_gpa_addition', 'vw_gpa_deletion',
     'vw_total_premium_exit_employee', 'vw_ctc_gmc_slab_timeline',
+    'vw_employee_net_balance_2025_26',  // ✅ ADDED: consolidated 25-26 financial data
   ];
 
   // Run all in parallel; isolate errors per source so one failure doesn't kill the whole response
