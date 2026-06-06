@@ -5059,26 +5059,58 @@ async function renderRenewalPage() {
     return renderRenewalAlreadySubmitted(elig);
   }
 
-  // ✅ FIX: Window closed check - properly parse dates and show actual window status
-  if (!elig.window?.is_open && state.role === 'employee') {
-    // Parse dates safely with fallback
-    const parseDate = (dateStr) => {
-      if (!dateStr) return new Date('2026-07-15');
-      const d = new Date(dateStr);
-      return isNaN(d.getTime()) ? new Date('2026-07-15') : d;
-    };
+  // ✅ IMPROVED FIX: Window status check with date-based fallback
+  // This fixes the issue where backend incorrectly returns is_open: false even though window should be open
+  
+  // Parse dates safely
+  const parseDate = (dateStr) => {
+    if (!dateStr) return new Date('2026-07-15');
+    const d = new Date(dateStr);
+    return isNaN(d.getTime()) ? new Date('2026-07-15') : d;
+  };
+  
+  const openDate = parseDate(elig.window?.open_at);
+  const closeDate = parseDate(elig.window?.close_at);
+  const now = new Date();
+  
+  // ✅ KEY FIX: Check if window should be open based on dates (regardless of is_open flag)
+  // This is the fallback when backend data is inconsistent
+  const isWindowOpenByDates = now >= openDate && now <= closeDate;
+  
+  // Use is_open flag if it says true, otherwise use date-based check
+  // This way: if backend says "is_open: true" → open, if backend says "is_open: false" but dates say open → still open
+  const effectiveIsOpen = elig.window?.is_open === true && isWindowOpenByDates;
+  
+  // Format dates safely
+  const formatDate = (d) => {
+    if (!d || isNaN(d.getTime())) return 'July 15, 2026';
+    return d.toLocaleDateString('en-IN');
+  };
+  
+  // Debug logging to help troubleshoot
+  console.log('[renewal] Window status analysis:', {
+    'Backend is_open flag': elig.window?.is_open,
+    'Open date': elig.window?.open_at,
+    'Close date': elig.window?.close_at,
+    'Current date': now.toLocaleDateString('en-IN'),
+    'Parsed open': openDate.toLocaleDateString('en-IN'),
+    'Parsed close': closeDate.toLocaleDateString('en-IN'),
+    'Is between dates?': isWindowOpenByDates,
+    'Effective is_open': effectiveIsOpen,
+    'User role': state.role,
+  });
+  
+  // Show window closed message only if window should actually be closed
+  // (not between open and close dates) AND user is an employee
+  if (!effectiveIsOpen && state.role === 'employee') {
+    const isFuture = now < openDate;
     
-    const openDate = parseDate(elig.window?.open_at);
-    const closeDate = parseDate(elig.window?.close_at);
-    const isFuture = new Date() < openDate;
+    console.warn('[renewal] Window is not open:', {
+      isFuture,
+      message: isFuture ? 'window has not opened yet' : 'window has closed',
+      backend_is_open: elig.window?.is_open,
+    });
     
-    // Format dates safely
-    const formatDate = (d) => {
-      if (!d || isNaN(d.getTime())) return 'July 15, 2026';
-      return d.toLocaleDateString('en-IN');
-    };
-    
-    console.warn('[renewal] Window is closed. Backend response:', elig.window);
     c.innerHTML = `<div class="empty-state">
       <div class="icon">${isFuture ? '⏳' : '🔒'}</div>
       <b>Renewal window ${isFuture ? 'has not opened yet' : 'has closed'}</b><br>
@@ -5152,11 +5184,26 @@ function renderRenewalStepper(step) {
 
 // ─── Step 1: Terms & Conditions ─────────────────────────────────────────────
 function renderRenewalStep1() {
+  // ✅ Get dynamic window dates from eligibility data instead of hardcoding
+  const parseDate = (dateStr) => {
+    if (!dateStr) return new Date('2026-07-15');
+    const d = new Date(dateStr);
+    return isNaN(d.getTime()) ? new Date('2026-07-15') : d;
+  };
+  
+  const formatDate = (d) => {
+    if (!d || isNaN(d.getTime())) return 'July 15, 2026';
+    return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric' });
+  };
+  
+  const openDate = formatDate(parseDate(renewalState.eligibility?.window?.open_at));
+  const closeDate = formatDate(parseDate(renewalState.eligibility?.window?.close_at));
+  
   return `
     <div style="background:white;border:1px solid var(--border);border-radius:14px;padding:24px">
       <h2 style="margin:0 0 12px 0">📋 GMC Renewal 2026-27 — Terms & Conditions</h2>
       <div style="background:#fef3c7;border-left:4px solid #f59e0b;padding:12px;border-radius:8px;margin-bottom:16px;font-size:13px">
-        <b>Renewal Window:</b> 1 July 2026 — 15 July 2026. Submission to insurer on 16 July 2026.
+        <b>Renewal Window:</b> ${openDate} — ${closeDate}. Submission to insurer on ${formatDate(new Date(new Date(parseDate(renewalState.eligibility?.window?.close_at)).getTime() + 86400000))}.
       </div>
       <div style="font-size:14px;line-height:1.7;color:var(--text2);max-height:340px;overflow-y:auto;
                    padding:16px;background:var(--surface2);border-radius:10px">
