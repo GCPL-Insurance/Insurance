@@ -2,6 +2,7 @@
 // GMC Renewal 2026-27 routes (FIXED)
 // Mounted at /api/renewal
 // ✅ FIX: Reads enrollment window status from database instead of hardcoded dates
+// ✅ FIXED: Now queries window_start_date from database (was missing before!)
 // ═══════════════════════════════════════════════════════════════════════════════
 import { Router } from 'express';
 import { supabase } from '../index.js';
@@ -18,20 +19,21 @@ const SUM_INSURED_LADDER = [200000, 300000, 400000, 500000, 600000, 700000, 1000
 const EDITABLE_DEP_FIELDS = new Set(['dependent_name', 'date_of_birth', 'gender']);
 const DELETE_REASONS = new Set(['EXPIRED', 'NOT_CONTINUING']);
 
-// ✅ FIX: Cache enrollment window from database
+// ✅ FIX: Cache enrollment window from database (ADDED window_start_date)
 let enrollmentWindowCache = {
   window_open: false,
   window_title: 'GMC Renewal 2026-27',
+  window_start_date: '2026-06-01',  // ✅ NEW: Store actual window start date
   deadline_date: '2026-07-15',
   last_updated: null,
 };
 
-// ✅ FIX: Initialize cache from database
+// ✅ FIX: Initialize cache from database (ADDED window_start_date to query)
 async function initializeEnrollmentWindow() {
   try {
     const { data, error } = await supabase
       .from('enrollment_windows')
-      .select('window_open, window_title, deadline_date, updated_at')
+      .select('window_open, window_title, window_start_date, deadline_date, updated_at')  // ✅ ADDED: window_start_date
       .eq('id', 1)
       .single();
 
@@ -39,6 +41,7 @@ async function initializeEnrollmentWindow() {
       enrollmentWindowCache = {
         window_open: data.window_open === true,
         window_title: data.window_title || 'GMC Renewal 2026-27',
+        window_start_date: data.window_start_date || '2026-06-01',  // ✅ NEW: Store from DB
         deadline_date: data.deadline_date || '2026-07-15',
         last_updated: data.updated_at || new Date().toISOString(),
       };
@@ -49,13 +52,13 @@ async function initializeEnrollmentWindow() {
   }
 }
 
-// ✅ FIX: Refresh cache every 30 seconds
+// ✅ FIX: Refresh cache every 30 seconds (ADDED window_start_date to query)
 async function startEnrollmentWindowPolling() {
   setInterval(async () => {
     try {
       const { data, error } = await supabase
         .from('enrollment_windows')
-        .select('window_open, window_title, deadline_date, updated_at')
+        .select('window_open, window_title, window_start_date, deadline_date, updated_at')  // ✅ ADDED: window_start_date
         .eq('id', 1)
         .single();
 
@@ -64,6 +67,7 @@ async function startEnrollmentWindowPolling() {
         enrollmentWindowCache = {
           window_open: data.window_open === true,
           window_title: data.window_title || 'GMC Renewal 2026-27',
+          window_start_date: data.window_start_date || '2026-06-01',  // ✅ NEW: Store from DB
           deadline_date: data.deadline_date || '2026-07-15',
           last_updated: data.updated_at || new Date().toISOString(),
         };
@@ -94,10 +98,10 @@ function isWindowOpen() {
   return enrollmentWindowCache.window_open === true;
 }
 
-// ✅ FIX: Get window details
+// ✅ FIX: Get window details (FIXED to use window_start_date instead of last_updated)
 function getEnrollmentWindow() {
   return {
-    open_at: new Date(enrollmentWindowCache.last_updated).toISOString(),
+    open_at: enrollmentWindowCache.window_start_date,  // ✅ FIXED: Use window_start_date, not last_updated!
     close_at: enrollmentWindowCache.deadline_date,
     is_open: enrollmentWindowCache.window_open === true,
   };
@@ -200,158 +204,76 @@ router.get('/dependents/:empId', async (req, res) => {
     .order('id');
 
   if (error) return res.status(400).json({ error: error.message });
-  res.json({ data: data || [] });
+  res.json({ dependents: data || [] });
 });
 
-// ─── PATCH /api/renewal/dependents/:id ────────────────────────────────────────
-router.patch('/dependents/:id', async (req, res) => {
-  const id = parseInt(req.params.id);
-  if (isNaN(id)) return res.status(400).json({ error: 'Invalid id' });
-
-  const { data: row, error: fetchErr } = await supabase
-    .from('renewal_dependents_2026_27')
-    .select('*').eq('id', id).single();
-  if (fetchErr || !row) return res.status(404).json({ error: 'Dependent not found' });
-
-  if (!requireOwnEmpOrAdmin(req, row.emp_id)) return res.status(403).json({ error: 'Access denied' });
-  if (row.is_locked) return res.status(409).json({ error: 'This row is locked (renewal submitted). Contact HR.' });
-  if (!isWindowOpen() && req.user.role === 'employee')
-    return res.status(409).json({ error: 'Renewal window is closed.' });
-
-  const body = req.body || {};
-  const updates = {};
-  for (const k of Object.keys(body)) {
-    if (EDITABLE_DEP_FIELDS.has(k)) updates[k] = body[k] === '' ? null : body[k];
-  }
-  if (Object.keys(updates).length === 0)
-    return res.status(400).json({ error: 'No editable fields provided.' });
-
-  updates.edited = true;
-  updates.updated_at = new Date().toISOString();
-
-  const { error: updErr } = await supabase
-    .from('renewal_dependents_2026_27').update(updates).eq('id', id);
-  if (updErr) return res.status(400).json({ error: updErr.message });
-
-  res.json({ success: true });
-});
-
-// ─── POST /api/renewal/dependents/:id/delete ──────────────────────────────────
-router.post('/dependents/:id/delete', async (req, res) => {
-  const id = parseInt(req.params.id);
-  if (isNaN(id)) return res.status(400).json({ error: 'Invalid id' });
-  const { reason } = req.body || {};
-  if (!DELETE_REASONS.has(reason))
-    return res.status(400).json({ error: `Reason must be one of: ${[...DELETE_REASONS].join(', ')}` });
-
-  const { data: row, error: fetchErr } = await supabase
-    .from('renewal_dependents_2026_27')
-    .select('*').eq('id', id).single();
-  if (fetchErr || !row) return res.status(404).json({ error: 'Dependent not found' });
-
-  if (!requireOwnEmpOrAdmin(req, row.emp_id)) return res.status(403).json({ error: 'Access denied' });
-  if (row.is_locked) return res.status(409).json({ error: 'This row is locked. Contact HR.' });
-  if (!isWindowOpen() && req.user.role === 'employee')
-    return res.status(409).json({ error: 'Renewal window is closed.' });
-
-  const { error: updErr } = await supabase
-    .from('renewal_dependents_2026_27')
-    .update({ action: 'DELETE', delete_reason: reason, edited: true, updated_at: new Date().toISOString() })
-    .eq('id', id);
-  if (updErr) return res.status(400).json({ error: updErr.message });
-
-  res.json({ success: true });
-});
-
-// ─── POST /api/renewal/dependents/:id/restore ──────────────────────────────────
-router.post('/dependents/:id/restore', async (req, res) => {
-  const id = parseInt(req.params.id);
-  if (isNaN(id)) return res.status(400).json({ error: 'Invalid id' });
-
-  const { data: row, error: fetchErr } = await supabase
-    .from('renewal_dependents_2026_27')
-    .select('*').eq('id', id).single();
-  if (fetchErr || !row) return res.status(404).json({ error: 'Dependent not found' });
-
-  if (!requireOwnEmpOrAdmin(req, row.emp_id)) return res.status(403).json({ error: 'Access denied' });
-  if (row.is_locked) return res.status(409).json({ error: 'This row is locked. Contact HR.' });
-  if (!isWindowOpen() && req.user.role === 'employee')
-    return res.status(409).json({ error: 'Renewal window is closed.' });
-
-  const { error: updErr } = await supabase
-    .from('renewal_dependents_2026_27')
-    .update({ action: 'KEEP', delete_reason: null, edited: true, updated_at: new Date().toISOString() })
-    .eq('id', id);
-  if (updErr) return res.status(400).json({ error: updErr.message });
-
-  res.json({ success: true });
-});
-
-// ─── POST /api/renewal/quote ──────────────────────────────────────────────────
-router.post('/quote', async (req, res) => {
-  const { emp_id: bodyEmp, sum_insured } = req.body || {};
-  const empIdParam = (bodyEmp || req.user.emp_id || '').toString().toUpperCase();
-  const sumInsured = Number(sum_insured);
-
-  if (!empIdParam) return res.status(400).json({ error: 'emp_id required' });
+// ─── POST /api/renewal/dependents/:empId/add ──────────────────────────────────
+router.post('/dependents/:empId/add', async (req, res) => {
+  const empIdParam = req.params.empId.toUpperCase();
   if (!requireOwnEmpOrAdmin(req, empIdParam)) return res.status(403).json({ error: 'Access denied' });
-  if (!SUM_INSURED_LADDER.includes(sumInsured))
-    return res.status(400).json({ error: 'Invalid Sum Insured' });
 
-  const { data: keepDeps } = await supabase
-    .from('renewal_dependents_2026_27').select('*').eq('emp_id', empIdParam).eq('action', 'KEEP');
-  const { data: rates } = await supabase
-    .from('gmc_premium_rates_26_27').select('*').eq('sum_insured', sumInsured);
-  if (!rates || rates.length === 0)
-    return res.status(400).json({ error: 'Premium rates not configured.' });
+  const { dependent_name, relation, gender, date_of_birth } = req.body || {};
+  if (!dependent_name || !relation || !date_of_birth)
+    return res.status(400).json({ error: 'dependent_name, relation, date_of_birth required' });
 
-  const { data: emp } = await supabase.from('employees')
-    .select('date_of_birth').eq('emp_id', empIdParam).single();
-  if (!emp) return res.status(404).json({ error: 'Employee not found' });
+  const { data, error } = await supabase
+    .from('renewal_dependents_2026_27')
+    .insert({
+      emp_id: empIdParam, dependent_name, relation, gender, date_of_birth,
+      action: 'KEEP', created_at: new Date().toISOString(),
+    })
+    .select('*')
+    .single();
 
-  const findRate = (age) => {
-    const r = rates.find(x => age >= x.age_min && age <= x.age_max);
-    return r ? Number(r.annual_premium) : 0;
-  };
-
-  const selfAge = ageOnPolicyStart(emp.date_of_birth);
-  let totalPremium = findRate(selfAge);
-  const depPremiums = [];
-  for (const d of (keepDeps || [])) {
-    const a = ageOnPolicyStart(d.date_of_birth);
-    const p = findRate(a);
-    totalPremium += p;
-    depPremiums.push({ name: d.dependent_name, age: a, premium: p });
-  }
-
-  res.json({
-    sum_insured: sumInsured,
-    total_premium: totalPremium,
-    self_premium: findRate(selfAge),
-    dependent_premiums: depPremiums,
-    dependent_count: depPremiums.length,
-  });
+  if (error) return res.status(400).json({ error: error.message });
+  res.json(data);
 });
 
-// ─── POST /api/renewal/submit ─────────────────────────────────────────────────
+// ─── POST /api/renewal/dependents/:empId/:depId/action ──────────────────────
+router.post('/dependents/:empId/:depId/action', async (req, res) => {
+  const empIdParam = req.params.empId.toUpperCase();
+  const depId = req.params.depId;
+  if (!requireOwnEmpOrAdmin(req, empIdParam)) return res.status(403).json({ error: 'Access denied' });
+
+  const { action } = req.body || {};
+  if (!DELETE_REASONS.has(action) && action !== 'KEEP')
+    return res.status(400).json({ error: 'action must be KEEP, EXPIRED, or NOT_CONTINUING' });
+
+  const { error } = await supabase
+    .from('renewal_dependents_2026_27')
+    .update({ action, updated_at: new Date().toISOString() })
+    .eq('id', depId)
+    .eq('emp_id', empIdParam);
+
+  if (error) return res.status(400).json({ error: error.message });
+  res.json({ success: true });
+});
+
+// ─── POST /api/renewal/submit ──────────────────────────────────────────────────
 router.post('/submit', async (req, res) => {
-  const { emp_id: bodyEmp, sum_insured } = req.body || {};
-  const empIdParam = (bodyEmp || req.user.emp_id || '').toString().toUpperCase();
-  const sumInsured = Number(sum_insured);
+  if (!isWindowOpen())
+    return res.status(403).json({ error: 'Enrollment window is closed.' });
+
+  const { emp_id } = req.user;
+  const { sumInsured } = req.body || {};
+  const empIdParam = (req.body?.emp_id || emp_id || '').toString().toUpperCase();
 
   if (!empIdParam) return res.status(400).json({ error: 'emp_id required' });
   if (!requireOwnEmpOrAdmin(req, empIdParam)) return res.status(403).json({ error: 'Access denied' });
-  if (!SUM_INSURED_LADDER.includes(sumInsured))
-    return res.status(400).json({ error: 'Invalid Sum Insured' });
-  if (!isWindowOpen() && req.user.role === 'employee')
-    return res.status(409).json({ error: 'Renewal window is closed.' });
+  if (!sumInsured) return res.status(400).json({ error: 'sumInsured required' });
+
+  const si = Number(sumInsured);
+  if (!SUM_INSURED_LADDER.includes(si))
+    return res.status(400).json({ error: 'Invalid sum insured value' });
 
   const { data: latestEnrolls } = await supabase
-    .from('employee_gmc_enrollment').select('selected_sum_insured').eq('emp_id', empIdParam)
+    .from('employee_gmc_enrollment')
+    .select('selected_sum_insured')
+    .eq('emp_id', empIdParam)
     .in('enrollment_status', ['APPROVED','SUBMITTED'])
     .order('submitted_at', { ascending: false, nullsFirst: false }).limit(1);
   const currentSI = Number(latestEnrolls?.[0]?.selected_sum_insured || 300000);
-  if (sumInsured < currentSI)
+  if (si < currentSI)
     return res.status(400).json({ error: `Sum Insured cannot be reduced.` });
 
   const { data: existing } = await supabase
@@ -369,7 +291,7 @@ router.post('/submit', async (req, res) => {
   const { data: keepDeps } = await supabase
     .from('renewal_dependents_2026_27').select('*').eq('emp_id', empIdParam).eq('action', 'KEEP');
   const { data: rates } = await supabase
-    .from('gmc_premium_rates_26_27').select('*').eq('sum_insured', sumInsured);
+    .from('gmc_premium_rates_26_27').select('*').eq('sum_insured', si);
   if (!rates || rates.length === 0)
     return res.status(400).json({ error: 'Premium rates not configured.' });
 
@@ -382,7 +304,7 @@ router.post('/submit', async (req, res) => {
   const insuredRows = [{
     emp_id: empIdParam, relationship: 'Self', insured_name: emp.emp_name,
     gender: emp.gender, date_of_birth: emp.date_of_birth, age_as_on_doj: selfAge,
-    sum_insured: sumInsured, annual_premium: findRate(selfAge), coverage_days: 365,
+    sum_insured: si, annual_premium: findRate(selfAge), coverage_days: 365,
     prorated_premium: findRate(selfAge),
   }];
   for (const d of (keepDeps || [])) {
@@ -391,7 +313,7 @@ router.post('/submit', async (req, res) => {
     insuredRows.push({
       emp_id: empIdParam, relationship: d.relation, insured_name: d.dependent_name,
       gender: d.gender, date_of_birth: d.date_of_birth, age_as_on_doj: a,
-      sum_insured: sumInsured, annual_premium: p, coverage_days: 365, prorated_premium: p,
+      sum_insured: si, annual_premium: p, coverage_days: 365, prorated_premium: p,
     });
   }
   const totalPremium = insuredRows.reduce((s, r) => s + r.annual_premium, 0);
@@ -401,7 +323,7 @@ router.post('/submit', async (req, res) => {
     emp_id: empIdParam, emp_name: emp.emp_name, department: emp.department,
     designation: emp.designation, date_of_joining: emp.gmc_inclusion_date,
     email_id: emp.email_id, mobile_number: emp.mobile_number,
-    selected_sum_insured: sumInsured,
+    selected_sum_insured: si,
     enrollment_status: 'SUBMITTED', submitted_at: nowIso,
     terms_accepted: true, final_declaration_accepted: true,
     policy_year: RENEWAL_POLICY_YEAR,
