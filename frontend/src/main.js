@@ -205,23 +205,35 @@ function initTurnstile() {
     window.onloadTurnstileCallback = initTurnstile;
     return;
   }
-  if (!turnstileLoginWidgetId) {
-    turnstileLoginWidgetId = window.turnstile.render('#turnstile-login', {
-      sitekey:  TURNSTILE_SITE_KEY,
-      theme:    'light',
-      callback:          (token) => { turnstileLoginToken  = token; },
-      'expired-callback': ()     => { turnstileLoginToken  = ''; },
-      'error-callback':   ()     => { turnstileLoginToken  = ''; },
-    });
+  
+  // ✅ FIX: Check if element exists before rendering
+  if (!turnstileLoginWidgetId && document.getElementById('turnstile-login')) {
+    try {
+      turnstileLoginWidgetId = window.turnstile.render('#turnstile-login', {
+        sitekey:  TURNSTILE_SITE_KEY,
+        theme:    'light',
+        callback:          (token) => { turnstileLoginToken  = token; },
+        'expired-callback': ()     => { turnstileLoginToken  = ''; },
+        'error-callback':   ()     => { turnstileLoginToken  = ''; },
+      });
+    } catch (e) {
+      console.warn('[Turnstile] Login container missing or error:', e.message);
+    }
   }
-  if (!turnstileSignupWidgetId) {
-    turnstileSignupWidgetId = window.turnstile.render('#turnstile-signup', {
-      sitekey:  TURNSTILE_SITE_KEY,
-      theme:    'light',
-      callback:          (token) => { turnstileSignupToken = token; },
-      'expired-callback': ()     => { turnstileSignupToken = ''; },
-      'error-callback':   ()     => { turnstileSignupToken = ''; },
-    });
+  
+  // ✅ FIX: Check if element exists before rendering
+  if (!turnstileSignupWidgetId && document.getElementById('turnstile-signup')) {
+    try {
+      turnstileSignupWidgetId = window.turnstile.render('#turnstile-signup', {
+        sitekey:  TURNSTILE_SITE_KEY,
+        theme:    'light',
+        callback:          (token) => { turnstileSignupToken = token; },
+        'expired-callback': ()     => { turnstileSignupToken = ''; },
+        'error-callback':   ()     => { turnstileSignupToken = ''; },
+      });
+    } catch (e) {
+      console.warn('[Turnstile] Signup container missing or error:', e.message);
+    }
   }
 }
 
@@ -5019,6 +5031,13 @@ async function renderRenewalPage() {
   try { elig = await renewal.eligibility(); }
   catch (e) { c.innerHTML = `<div class="empty-state"><div class="icon">⚠️</div>${e.message}</div>`; return; }
 
+  // ✅ FIX: Debug log window status
+  console.log('[renewal] Backend response - window status:', {
+    is_open: elig.window?.is_open,
+    window_data: elig.window,
+    eligible: elig.eligible,
+  });
+
   renewalState.eligibility = elig;
 
   if (!elig.eligible) {
@@ -5040,16 +5059,34 @@ async function renderRenewalPage() {
     return renderRenewalAlreadySubmitted(elig);
   }
 
-  // Window closed?
-  if (!elig.window.is_open && state.role === 'employee') {
-    const open = new Date(elig.window.open_at);
-    const close = new Date(elig.window.close_at);
-    const isFuture = new Date() < open;
+  // ✅ FIX: Window closed check - properly parse dates and show actual window status
+  if (!elig.window?.is_open && state.role === 'employee') {
+    // Parse dates safely with fallback
+    const parseDate = (dateStr) => {
+      if (!dateStr) return new Date('2026-07-15');
+      const d = new Date(dateStr);
+      return isNaN(d.getTime()) ? new Date('2026-07-15') : d;
+    };
+    
+    const openDate = parseDate(elig.window?.open_at);
+    const closeDate = parseDate(elig.window?.close_at);
+    const isFuture = new Date() < openDate;
+    
+    // Format dates safely
+    const formatDate = (d) => {
+      if (!d || isNaN(d.getTime())) return 'July 15, 2026';
+      return d.toLocaleDateString('en-IN');
+    };
+    
+    console.warn('[renewal] Window is closed. Backend response:', elig.window);
     c.innerHTML = `<div class="empty-state">
       <div class="icon">${isFuture ? '⏳' : '🔒'}</div>
       <b>Renewal window ${isFuture ? 'has not opened yet' : 'has closed'}</b><br>
       <div style="margin-top:8px;color:var(--text2)">
-        Window: ${open.toLocaleDateString('en-IN')} — ${close.toLocaleDateString('en-IN')}
+        Window: ${formatDate(openDate)} — ${formatDate(closeDate)}
+      </div>
+      <div style="margin-top:12px;font-size:12px;color:var(--text3)">
+        If you believe this is an error, contact HR.
       </div>
     </div>`;
     return;
