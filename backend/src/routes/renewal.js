@@ -32,7 +32,7 @@ let enrollmentWindowCache = {
 async function initializeEnrollmentWindow() {
   try {
     const { data, error } = await supabase
-      .from('renewal_config_2026_27')
+      .from('enrollment_windows')
       .select('window_open, window_title, window_start_date, deadline_date, updated_at')  // ✅ ADDED: window_start_date
       .eq('id', 1)
       .single();
@@ -57,7 +57,7 @@ async function startEnrollmentWindowPolling() {
   setInterval(async () => {
     try {
       const { data, error } = await supabase
-        .from('renewal_config_2026_27')
+        .from('enrollment_windows')
         .select('window_open, window_title, window_start_date, deadline_date, updated_at')  // ✅ ADDED: window_start_date
         .eq('id', 1)
         .single();
@@ -141,20 +141,30 @@ router.get('/eligibility', async (req, res) => {
 
   const eligible = emp.is_active !== false && !!emp.gmc_inclusion_date;
 
-  const { data: calc } = await supabase
-    .from('vw_employee_gmc_26_27_calc')
-    .select('*')
+  // ✅ FIX: Fetch 25-26 figures from the correct view
+  const { data: netBal } = await supabase
+    .from('vw_employee_net_balance_2025_26')
+    .select('total_ctc_gmc, opening_balance_24_25, salary_gmc_deducted, total_premium, net_balance')
     .eq('emp_id', empIdParam)
     .single();
 
-  const { data: latestEnrolls } = await supabase
-    .from('employee_gmc_enrollment')
-    .select('selected_sum_insured, enrollment_status, submitted_at')
+  // Map view columns to the field names the frontend expects
+  const calc = netBal ? {
+    ctc_gmc_25_26:          Math.round(Number(netBal.total_ctc_gmc        || 0)),
+    opening_balance_25_26:  Math.round(Number(netBal.opening_balance_24_25 || 0)),
+    salary_deductions_25_26: Math.round(Number(netBal.salary_gmc_deducted  || 0)),
+    premium_25_26:          Math.round(Number(netBal.total_premium         || 0)),
+    closing_balance_25_26:  Math.round(Number(netBal.net_balance           || 0)),
+  } : null;
+
+  // ✅ FIX Bug 1: Fetch current sum insured STRICTLY from sum_insured_25_26 table.
+  // Fallback to 300000 (standard) only if no record exists.
+  const { data: siRow } = await supabase
+    .from('sum_insured_25_26')
+    .select('sum_insured')
     .eq('emp_id', empIdParam)
-    .in('enrollment_status', ['APPROVED', 'SUBMITTED'])
-    .order('submitted_at', { ascending: false, nullsFirst: false })
-    .limit(1);
-  const currentSumInsured = Number(latestEnrolls?.[0]?.selected_sum_insured || 300000);
+    .single();
+  const currentSumInsured = siRow?.sum_insured ? Number(siRow.sum_insured) : 300000;
 
   const { data: renewalEnroll } = await supabase
     .from('employee_gmc_enrollment')
@@ -342,10 +352,13 @@ router.post('/submit', async (req, res) => {
     return res.status(500).json({ error: 'Failed to save insured members.' });
   }
 
-  const { data: calc } = await supabase
-    .from('vw_employee_gmc_26_27_calc').select('*').eq('emp_id', empIdParam).single();
-  const ctc = Number(calc?.ctc_gmc_26_27_projected || 0);
-  const closing = Number(calc?.closing_balance_25_26 || 0);
+  // ✅ FIX: 26-27 projected CTC from its own view; closing balance strictly from vw_employee_net_balance_2025_26
+  const { data: calc26 } = await supabase
+    .from('vw_employee_gmc_26_27_calc').select('ctc_gmc_26_27_projected').eq('emp_id', empIdParam).single();
+  const { data: netBal26 } = await supabase
+    .from('vw_employee_net_balance_2025_26').select('net_balance').eq('emp_id', empIdParam).single();
+  const ctc = Number(calc26?.ctc_gmc_26_27_projected || 0);
+  const closing = Math.round(Number(netBal26?.net_balance || 0));
   const net = closing + ctc - totalPremium;
   const refund_sep_26 = Math.max(0, Math.min(closing, net));
   const salary_deduction = Math.max(0, -net);
