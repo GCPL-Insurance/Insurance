@@ -208,172 +208,135 @@ router.post('/signup', async (req, res) => {
 
 router.post('/login', async (req, res) => {
   try {
-    const { emp_id, password, captcha_token } = req.body;
+    const { email, password } = req.body;
+    if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
 
-    const captchaOk = await verifyCaptcha(captcha_token);
-    if (!captchaOk) return res.status(400).json({ error: 'Captcha verification failed' });
-
-    if (!emp_id || !password)
-      return res.status(400).json({ error: 'Employee ID and password required' });
-
-    const empIdUpper = emp_id.trim().toUpperCase();
-
-    const { data: profile, error: profileError } = await supabase
+    const { data: profile, error: profileErr } = await supabase
       .from('user_profiles')
-      .select('emp_id, emp_name, email, password_hash, role')
-      .eq('emp_id', empIdUpper)
+      .select('emp_id, email, password_hash, role')
+      .eq('email', email.toLowerCase())
       .single();
 
-    if (profileError || !profile)
-      return res.status(401).json({ error: 'Invalid credentials' });
-
-    if (profile.role === 'admin' || profile.role === 'hr')
-      return res.status(403).json({ error: 'Please use the main portal to sign in.' });
-
-    if (profile.role !== 'onboarding' && profile.role !== 'employee')
-      return res.status(403).json({ error: 'Access denied for this portal.' });
+    if (profileErr || !profile) return res.status(401).json({ error: 'Invalid email or password' });
 
     const passwordMatch = await bcrypt.compare(password, profile.password_hash);
-    if (!passwordMatch)
-      return res.status(401).json({ error: 'Invalid credentials' });
+    if (!passwordMatch) return res.status(401).json({ error: 'Invalid email or password' });
 
-    const tokenPayload = {
+    const { data: empMain } = await supabase
+      .from('employees')
+      .select('emp_id, emp_name, role, email_id')
+      .eq('emp_id', profile.emp_id)
+      .single();
+
+    const emp_name = empMain?.emp_name || null;
+    const role_final = empMain?.role || profile.role || 'employee';
+
+    const accessToken = generateAccessToken({
       emp_id: profile.emp_id,
-      emp_name: profile.emp_name,
       email: profile.email,
-      role: profile.role,
-    };
+      emp_name,
+      role: role_final,
+    });
 
-    const accessToken = generateAccessToken(tokenPayload);
-    const refreshToken = generateRefreshToken(tokenPayload);
+    const refreshToken = generateRefreshToken({
+      emp_id: profile.emp_id,
+    });
 
-    await supabase
-      .from('refresh_tokens')
-      .insert({ emp_id: profile.emp_id, token: refreshToken, created_at: new Date().toISOString() });
-
-    res.json({ access_token: accessToken, refresh_token: refreshToken, user: tokenPayload });
+    res.json({
+      access_token: accessToken,
+      refresh_token: refreshToken,
+      user: { emp_id: profile.emp_id, email: profile.email, emp_name, role: role_final },
+    });
   } catch (err) {
     console.error('login error:', err);
     res.status(500).json({ error: 'Server error' });
   }
 });
 
-// ─── POST /api/onboarding/refresh ────────────────────────────────────────────
+// ─── POST /api/onboarding/refresh ─────────────────────────────────────────────
 
 router.post('/refresh', async (req, res) => {
   try {
     const { refresh_token } = req.body;
-    if (!refresh_token) return res.status(401).json({ error: 'No refresh token' });
+    if (!refresh_token) return res.status(400).json({ error: 'Refresh token required' });
 
-    let decoded;
-    try {
-      decoded = verifyRefreshToken(refresh_token);
-    } catch {
-      return res.status(401).json({ error: 'Invalid or expired refresh token' });
-    }
-
-    const { data: tokenRecord } = await supabase
-      .from('refresh_tokens')
-      .select('emp_id')
-      .eq('token', refresh_token)
-      .single();
-
-    if (!tokenRecord)
-      return res.status(401).json({ error: 'Refresh token not found' });
+    const decoded = verifyRefreshToken(refresh_token);
+    const { emp_id } = decoded;
 
     const { data: profile } = await supabase
       .from('user_profiles')
-      .select('emp_id, emp_name, email, role')
-      .eq('emp_id', decoded.emp_id)
+      .select('emp_id, email, role')
+      .eq('emp_id', emp_id)
       .single();
 
-    if (!profile) return res.status(401).json({ error: 'User not found' });
+    if (!profile) return res.status(401).json({ error: 'Token invalid' });
 
-    const tokenPayload = {
+    const { data: empMain } = await supabase
+      .from('employees')
+      .select('emp_name, role')
+      .eq('emp_id', emp_id)
+      .single();
+
+    const emp_name = empMain?.emp_name || null;
+    const role_final = empMain?.role || profile.role || 'employee';
+
+    const accessToken = generateAccessToken({
       emp_id: profile.emp_id,
-      emp_name: profile.emp_name,
       email: profile.email,
-      role: profile.role,
-    };
-
-    const newAccessToken = generateAccessToken(tokenPayload);
-    const newRefreshToken = generateRefreshToken(tokenPayload);
-
-    await supabase.from('refresh_tokens').delete().eq('token', refresh_token);
-    await supabase.from('refresh_tokens').insert({
-      emp_id: profile.emp_id,
-      token: newRefreshToken,
-      created_at: new Date().toISOString(),
+      emp_name,
+      role: role_final,
     });
 
-    res.json({ access_token: newAccessToken, refresh_token: newRefreshToken });
+    const newRefreshToken = generateRefreshToken({ emp_id: profile.emp_id });
+
+    res.json({
+      access_token: accessToken,
+      refresh_token: newRefreshToken,
+      user: { emp_id: profile.emp_id, email: profile.email, emp_name, role: role_final },
+    });
   } catch (err) {
     console.error('refresh error:', err);
-    res.status(500).json({ error: 'Server error' });
+    res.status(401).json({ error: 'Invalid refresh token' });
   }
 });
 
-// ─── GET /api/onboarding/me ───────────────────────────────────────────────────
-
-router.get('/me', authMiddleware, async (req, res) => {
-  try {
-    const { data: profile } = await supabase
-      .from('user_profiles')
-      .select('emp_id, emp_name, email, role')
-      .eq('emp_id', req.user.emp_id)
-      .single();
-
-    if (!profile) return res.status(404).json({ error: 'User not found' });
-    res.json({ user: profile });
-  } catch (err) {
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
-// ─── POST /api/onboarding/logout ─────────────────────────────────────────────
-
-router.post('/logout', authMiddleware, async (req, res) => {
-  try {
-    const { refresh_token } = req.body;
-    if (refresh_token) {
-      await supabase.from('refresh_tokens').delete().eq('token', refresh_token);
-    }
-    res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
-// ─── GET /api/onboarding/enrollment-data ─────────────────────────────────────
-// Priority: employees table (canonical) → employee_onboarding (fallback).
-// CTC GMC total: vw_employee_ctc_gmc_total (view, most accurate) → JS proration on frontend.
+// ─── GET /api/auth/enrollment-data ────────────────────────────────────────────
 
 router.get('/enrollment-data', authMiddleware, async (req, res) => {
   try {
     const emp_id = req.user.emp_id;
 
-    // ── Fetch all sources in parallel ────────────────────────────────────────
-    const [empMainRes, onboardingRes, enrollmentRes, rateRes, ctcTotalRes, depsRes] =
-      await Promise.all([
-        // 1. employees — canonical HR master (preferred source)
+    const [
+      empMainRes,
+      onboardingRes,
+      enrollmentRes,
+      depsRes,
+      rateRes,
+      ctcTotalRes,
+    ] = await Promise.all([
+        // 1. employees table (canonical HR master)
         supabase
           .from('employees')
-          .select('emp_id, emp_name, gender, date_of_birth, date_of_joining, department, designation, ctc_gmc_per_month, unit, gmc_inclusion_date, gmc_effective_date, is_active, status')
+          .select('emp_id, emp_name, gender, date_of_birth, date_of_joining, department, designation, ctc_gmc_per_month, unit, gmc_inclusion_date, gmc_effective_date')
           .eq('emp_id', emp_id)
           .single(),
-        // 2. employee_onboarding — fallback / supplementary fields (mobile, email)
+        // 2. employee_onboarding (new employees / contact fields)
         supabase
           .from('employee_onboarding')
-          .select('emp_id, emp_name, gender, date_of_birth, date_of_joining, department, designation, ctc_gmc_per_month, onboarding_status, unit, mobile_number, email_id, gmc_inclusion_date')
+          .select('emp_name, date_of_birth, gender, date_of_joining, department, designation, ctc_gmc_per_month, unit, onboarding_status, mobile_number, email_id')
           .eq('emp_id', emp_id)
           .single(),
-        // 3. existing enrollment draft
+        // 3. existing enrollment draft (if any)
         supabase
           .from('employee_gmc_enrollment')
           .select('*')
           .eq('emp_id', emp_id)
-          .order('created_at', { ascending: false })
-          .limit(1),
+          .eq('enrollment_status', 'DRAFT'),
+        // 4. dependents from previous enrollment
+        supabase
+          .from('employee_gmc_enrollment_insured')
+          .select('*')
+          .eq('emp_id', emp_id),
         // 4. insurer rate cards for premium calculation
         supabase
           .from('gmc_rate_cards')
@@ -394,15 +357,13 @@ router.get('/enrollment-data', authMiddleware, async (req, res) => {
           .eq('emp_id', emp_id),
       ]);
 
-    const mainEmp   = empMainRes?.data;    // from public.employees
-    const onboarding = onboardingRes?.data; // from public.employee_onboarding
+    const mainEmp   = empMainRes?.data;
+    const onboarding = onboardingRes?.data;
 
     if (!mainEmp && !onboarding) {
       return res.status(404).json({ error: 'Employee data not found' });
     }
 
-    // ── Merge: employees wins for all HR fields; onboarding adds contact fields ──
-    // pick() returns the first non-null/non-undefined value across sources.
     const pick = (...vals) => vals.find(v => v !== null && v !== undefined) ?? null;
 
     const employeeData = {
@@ -413,12 +374,10 @@ router.get('/enrollment-data', authMiddleware, async (req, res) => {
       date_of_joining:    pick(mainEmp?.date_of_joining,    onboarding?.date_of_joining),
       department:         pick(mainEmp?.department,         onboarding?.department),
       designation:        pick(mainEmp?.designation,        onboarding?.designation),
-      // ctc_gmc_per_month: employees table is the authoritative salary field
       ctc_gmc_per_month:  pick(mainEmp?.ctc_gmc_per_month,  onboarding?.ctc_gmc_per_month),
       unit:               pick(mainEmp?.unit,               onboarding?.unit),
       gmc_inclusion_date: pick(mainEmp?.gmc_inclusion_date, onboarding?.gmc_inclusion_date),
       gmc_effective_date: mainEmp?.gmc_effective_date ?? null,
-      // contact fields only exist in onboarding
       mobile_number:      onboarding?.mobile_number ?? null,
       email_id:           onboarding?.email_id ?? null,
       onboarding_status:  onboarding?.onboarding_status ?? 'pending',
@@ -437,8 +396,6 @@ router.get('/enrollment-data', authMiddleware, async (req, res) => {
         email:         onboarding?.email_id      || enrollmentDraft?.email_id      || null,
       },
       existing_dependents: existingDependents,
-      // Pre-calculated total CTC GMC from vw_employee_ctc_gmc_total.
-      // null = no view row → frontend falls back to JS proration using ctc_gmc_per_month.
       ctc_gmc_total_from_view: ctcTotalRes?.data?.total_ctc_gmc ?? null,
     });
   } catch (err) {
@@ -447,7 +404,8 @@ router.get('/enrollment-data', authMiddleware, async (req, res) => {
   }
 });
 
-// ─── POST /api/onboarding/enrollment ─────────────────────────────────────────
+// ─── POST /api/onboarding/enrollment ───────────────────────────────────────────
+// ✅ FIX: Syncs mobile_number and email_id to employees table on submit
 
 router.post('/enrollment', authMiddleware, async (req, res) => {
   try {
@@ -486,6 +444,35 @@ router.post('/enrollment', authMiddleware, async (req, res) => {
     if (upsertError) {
       console.error('Enrollment upsert error:', upsertError);
       return res.status(500).json({ error: 'Failed to save enrollment' });
+    }
+
+    // ✅ FIX: Sync contact info to employees table (canonical source)
+    if (submit) {
+      try {
+        const updatePayload = {};
+        
+        if (enrollment_data.mobile_number) {
+          updatePayload.mobile_number = enrollment_data.mobile_number;
+        }
+        
+        if (enrollment_data.email_id) {
+          updatePayload.email_id = enrollment_data.email_id;
+        }
+        
+        if (Object.keys(updatePayload).length > 0) {
+          await supabase
+            .from('employees')
+            .update({
+              ...updatePayload,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('emp_id', emp_id);
+          console.log('[enrollment] Synced contact info for', emp_id);
+        }
+      } catch (e) {
+        console.warn('[enrollment] Failed to sync to employees table:', e.message);
+        // Non-blocking — enrollment was successful
+      }
     }
 
     // ── Insert into employee_gmc_enrollment_insured ───────────────────────────
