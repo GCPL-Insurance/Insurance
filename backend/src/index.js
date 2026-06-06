@@ -140,7 +140,10 @@ import viewRoutes      from './routes/views.js';
 import exportRoutes    from './routes/export.js';
 import adminRoutes     from './routes/admin.js';
 import onboardingRoutes from './routes/onboarding.js';
-import renewalRoutes   from './routes/renewal.js';
+import renewalRoutes, { 
+  initializeEnrollmentWindow, 
+  startEnrollmentWindowPolling 
+} from './routes/renewal.js';
 
 // authLimiter is now applied per-route inside auth.js (login/signup only).
 // Enrollment routes (/api/auth/enrollment, /api/auth/enrollment-data) are
@@ -188,7 +191,25 @@ app.use((err, req, res, _next) => {
 });
 
 const PORT = process.env.PORT || 4000;
-const server = app.listen(PORT, () => console.log(`🚀 API running on port ${PORT} [${process.env.NODE_ENV || 'development'}]`));
+const server = app.listen(PORT, async () => {
+  console.log(`🚀 API running on port ${PORT} [${process.env.NODE_ENV || 'development'}]`);
+
+  // ✅ FIX: Initialize enrollment window from database on startup
+  try {
+    await initializeEnrollmentWindow();
+    console.log('[Startup] ✅ Enrollment window initialized from database');
+  } catch (e) {
+    console.warn('[Startup] ⚠️  Failed to initialize enrollment window:', e.message);
+  }
+
+  // ✅ FIX: Start polling enrollment window every 30 seconds
+  try {
+    startEnrollmentWindowPolling();
+    console.log('[Startup] ✅ Enrollment window polling started (30s interval)');
+  } catch (e) {
+    console.warn('[Startup] ⚠️  Failed to start enrollment window polling:', e.message);
+  }
+});
 
 // ── Prevent "Failed to fetch" on Render free tier ──────────────────────────
 // Render's load balancer has a 55s idle timeout. Set server timeouts slightly
