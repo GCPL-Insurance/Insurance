@@ -32,7 +32,7 @@ let enrollmentWindowCache = {
 async function initializeEnrollmentWindow() {
   try {
     const { data, error } = await supabase
-      .from('enrollment_windows')
+      .from('renewal_config_2026_27')
       .select('window_open, window_title, window_start_date, deadline_date, updated_at')  // ✅ ADDED: window_start_date
       .eq('id', 1)
       .single();
@@ -57,7 +57,7 @@ async function startEnrollmentWindowPolling() {
   setInterval(async () => {
     try {
       const { data, error } = await supabase
-        .from('enrollment_windows')
+        .from('renewal_config_2026_27')
         .select('window_open, window_title, window_start_date, deadline_date, updated_at')  // ✅ ADDED: window_start_date
         .eq('id', 1)
         .single();
