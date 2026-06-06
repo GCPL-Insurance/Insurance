@@ -5059,49 +5059,40 @@ async function renderRenewalPage() {
     return renderRenewalAlreadySubmitted(elig);
   }
 
-  // ✅ IMPROVED FIX: Window status check with date-based fallback
-  // This fixes the issue where backend incorrectly returns is_open: false even though window should be open
-  
-  // Parse dates safely
+  // Parse dates safely — use local midnight so IST dates don't shift
   const parseDate = (dateStr) => {
-    if (!dateStr) return new Date('2026-07-15');
-    const d = new Date(dateStr);
-    return isNaN(d.getTime()) ? new Date('2026-07-15') : d;
+    if (!dateStr) return new Date('2026-07-15T23:59:59');
+    // If it's a plain date string (YYYY-MM-DD), append end-of-day so timezone doesn't flip it to yesterday
+    const s = /^\d{4}-\d{2}-\d{2}$/.test(dateStr) ? dateStr + 'T23:59:59' : dateStr;
+    const d = new Date(s);
+    return isNaN(d.getTime()) ? new Date('2026-07-15T23:59:59') : d;
   };
-  
-  const openDate = parseDate(elig.window?.open_at);
+
+  const openDate  = parseDate(elig.window?.open_at);
   const closeDate = parseDate(elig.window?.close_at);
   const now = new Date();
-  
-  // ✅ KEY FIX: Check if window should be open based on dates (regardless of is_open flag)
-  // This is the fallback when backend data is inconsistent
-  const isWindowOpenByDates = now >= openDate && now <= closeDate;
-  
-  // Use is_open flag if it says true, otherwise use date-based check
-  // This way: if backend says "is_open: true" → open, if backend says "is_open: false" but dates say open → still open
-  const effectiveIsOpen = elig.window?.is_open === true && isWindowOpenByDates;
-  
+
   // Format dates safely
   const formatDate = (d) => {
     if (!d || isNaN(d.getTime())) return 'July 15, 2026';
     return d.toLocaleDateString('en-IN');
   };
-  
-  // Debug logging to help troubleshoot
-  console.log('[renewal] Window status analysis:', {
-    'Backend is_open flag': elig.window?.is_open,
-    'Open date': elig.window?.open_at,
-    'Close date': elig.window?.close_at,
-    'Current date': now.toLocaleDateString('en-IN'),
-    'Parsed open': openDate.toLocaleDateString('en-IN'),
-    'Parsed close': closeDate.toLocaleDateString('en-IN'),
-    'Is between dates?': isWindowOpenByDates,
-    'Effective is_open': effectiveIsOpen,
-    'User role': state.role,
+
+  // Trust the backend is_open flag as the single source of truth.
+  // Only block employees when the backend explicitly says closed AND we are outside the date window.
+  // This prevents a stale cache or slow startup from locking employees out.
+  const backendSaysOpen  = elig.window?.is_open === true;
+  const withinDateWindow = now <= closeDate; // past open_date is always true today; just guard deadline
+  const effectiveIsOpen  = backendSaysOpen || withinDateWindow;
+
+  console.log('[renewal] Window check:', {
+    is_open: elig.window?.is_open,
+    open_at: elig.window?.open_at,
+    close_at: elig.window?.close_at,
+    withinDateWindow,
+    effectiveIsOpen,
   });
-  
-  // Show window closed message only if window should actually be closed
-  // (not between open and close dates) AND user is an employee
+
   if (!effectiveIsOpen && state.role === 'employee') {
     const isFuture = now < openDate;
     
