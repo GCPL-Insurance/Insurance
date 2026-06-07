@@ -5324,15 +5324,17 @@ function renderRenewalStep2() {
   const e    = renewalState.eligibility.employee || {};
   const calc = renewalState.eligibility.calc || {};
 
-  // ✅ FIX: Show warning banners if required contact fields are missing
+  // If mobile is missing, let the employee add it right here.
   const mobileWarning = !e.mobile_number ? `
-    <div style="background:#fecaca;border:1px solid #fca5a5;border-radius:10px;padding:12px 14px;margin-bottom:14px;color:#991b1b;font-size:13px;display:flex;gap:10px;align-items:flex-start">
-      <span style="font-size:18px;line-height:1">⚠️</span>
-      <div>
-        <b>Mobile number is missing from your employee record.</b>
-        This is required to submit your renewal. Please
-        <button onclick="navigate('concerns')" style="background:none;border:none;color:#991b1b;text-decoration:underline;cursor:pointer;font-size:inherit;padding:0;font-weight:600">raise a concern to HR</button>
-        to update it before proceeding.
+    <div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:10px;padding:12px 14px;margin-bottom:14px;color:#9a3412;font-size:13px">
+      <div style="display:flex;gap:10px;align-items:flex-start;margin-bottom:10px">
+        <span style="font-size:18px;line-height:1">📱</span>
+        <div><b>Add your mobile number.</b> It's used by the insurer and for renewal updates.</div>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <input id="renewal-mobile-input" type="tel" maxlength="10" inputmode="numeric" placeholder="10-digit mobile"
+          style="flex:1;min-width:180px;padding:9px 12px;border:1px solid #fdba74;border-radius:8px;font-size:14px">
+        <button class="btn btn-primary btn-sm" onclick="renewalSaveMobile()">Save mobile</button>
       </div>
     </div>` : '';
 
@@ -5653,6 +5655,19 @@ function renewalAskDeleteReason(dep) {
   });
 }
 
+// ─── Save a missing mobile number from the renewal flow ──────────────────────
+async function renewalSaveMobile() {
+  const input = document.getElementById('renewal-mobile-input');
+  const mobile = (input?.value || '').replace(/\D/g, '');
+  if (mobile.length !== 10) return showToast('Enter a valid 10-digit mobile number', 'error');
+  try {
+    await renewal.updateContact({ mobile_number: mobile });
+    if (renewalState.eligibility?.employee) renewalState.eligibility.employee.mobile_number = mobile;
+    showToast('Mobile number saved', 'success');
+    renderRenewalStep();
+  } catch (e) { showToast(e.message, 'error'); }
+}
+
 // ─── Add a newborn / newly-married spouse ────────────────────────────────────
 async function renewalAddDependent(type) {
   const empId = renewalState.eligibility.employee.emp_id;
@@ -5909,6 +5924,7 @@ window.renewalEditDep       = renewalEditDep;
 window.renewalDeleteDep     = renewalDeleteDep;
 window.renewalRestoreDep    = renewalRestoreDep;
 window.renewalAddDependent  = renewalAddDependent;
+window.renewalSaveMobile    = renewalSaveMobile;
 window.submitRenewal        = submitRenewal;
 window.renewalState         = renewalState;
 

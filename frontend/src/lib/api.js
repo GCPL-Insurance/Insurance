@@ -290,6 +290,7 @@ export const renewal = {
   quote:  (body) => apiFetch('/renewal/quote',  { method: 'POST', body: JSON.stringify(body) }),
   submit: (body) => apiFetch('/renewal/submit', { method: 'POST', body: JSON.stringify(body) }),
   trackLogin: () => apiFetch('/renewal/_track-login', { method: 'POST' }).catch(() => null),
+  updateContact: (body) => apiFetch('/renewal/_update-contact', { method: 'POST', body: JSON.stringify(body) }),
   admin: {
     progress: ()            => apiFetch('/renewal/admin/progress'),
     remind:   (empId)       => apiFetch(`/renewal/admin/remind/${empId}`, { method: 'POST' }),

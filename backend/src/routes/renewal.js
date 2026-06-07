@@ -435,6 +435,25 @@ async function fetchProjectedCtc2627(empIdParam) {
   return Number(data?.ctc_gmc_26_27_projected || 0);
 }
 
+// Fire the renewal confirmation email via the Supabase Edge Function.
+// Fire-and-forget: failures are logged, never thrown, so submit is unaffected.
+function triggerRenewalConfirmationEmail(enrollment_id, emp_id) {
+  try {
+    const base   = process.env.SUPABASE_URL;
+    const secret = process.env.RENEWAL_FN_SECRET || '';
+    const auth   = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    if (!base) return;
+    fetch(`${base}/functions/v1/send-renewal-confirmation`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${auth}` },
+      body: JSON.stringify({ enrollment_id, emp_id, secret }),
+    }).then(r => { if (!r.ok) console.warn('[renewal] confirmation email HTTP', r.status); })
+      .catch(e => console.warn('[renewal] confirmation email error:', e.message));
+  } catch (e) {
+    console.warn('[renewal] confirmation trigger failed:', e.message);
+  }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Shared premium calculation. Self comes ONLY from the employee record;
 // members table is queried with relationship != 'Self' to avoid double-counting.
@@ -633,6 +652,9 @@ router.post('/submit', async (req, res) => {
 
   await bumpMonitor(empIdParam, { submitted_at: nowIso, enrollment_id });
 
+  // Fire the confirmation email (fire-and-forget; never blocks/breaks the submit).
+  triggerRenewalConfirmationEmail(enrollment_id, empIdParam);
+
   res.json({
     success: true, enrollment_id, total_premium_26_27: totalPremium, ctc_gmc_26_27: ctc,
     closing_balance_25_26: closing, refund_sep_2026: refund_sep_26, refund_sep_2027_estimate: refund_sep_27,
@@ -649,6 +671,41 @@ router.post('/_track-login', async (req, res) => {
   if (!empIdParam || req.user.role !== 'employee') return res.json({ ok: true });
   await bumpMonitor(empIdParam, { last_logged_in_at: new Date().toISOString() });
   res.json({ ok: true });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /api/renewal/_update-contact   body: { mobile_number, email_id? }
+// Lets an employee fill in a missing mobile number (and email) on their own record.
+// ─────────────────────────────────────────────────────────────────────────────
+router.post('/_update-contact', async (req, res) => {
+  const empIdParam = (req.user?.emp_id || '').toString().toUpperCase();
+  if (!empIdParam) return res.status(400).json({ error: 'emp_id required' });
+  if (!requireOwnEmpOrAdmin(req, empIdParam)) return res.status(403).json({ error: 'Access denied' });
+
+  const update = {};
+  if (req.body?.mobile_number !== undefined) {
+    const m = String(req.body.mobile_number).replace(/\D/g, '');   // digits only
+    if (m && (m.length < 10 || m.length > 12)) {
+      return res.status(400).json({ error: 'Enter a valid mobile number (10 digits).' });
+    }
+    update.mobile_number = m || null;
+  }
+  if (req.body?.email_id !== undefined) {
+    const e = String(req.body.email_id).trim();
+    if (e && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e)) {
+      return res.status(400).json({ error: 'Enter a valid email address.' });
+    }
+    update.email_id = e || null;
+  }
+  if (Object.keys(update).length === 0) return res.status(400).json({ error: 'Nothing to update' });
+
+  const { error } = await supabase.from('employees').update(update).eq('emp_id', empIdParam);
+  if (error) return res.status(400).json({ error: error.message });
+
+  // Keep the renewal monitor email in sync if it changed
+  if (update.email_id) await bumpMonitor(empIdParam, { email_id: update.email_id });
+
+  res.json({ success: true, ...update });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
