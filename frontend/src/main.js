@@ -3911,10 +3911,6 @@ async function renderEmployeeDashboardV2() {
   const isExistingEmployee = insDeps.length > 0;   // has 25-26 insurance data
   const isNewJoinee        = !isExistingEmployee;   // relies on GMC enrollment
 
-  // Drive nav visibility: insurance eligibility = gmc_inclusion_date present;
-  // existing (in insurance_dependents) → Renewal only; new joinee → Enrollment only.
-  applyRenewalNavGating(!!emp.gmc_inclusion_date, isExistingEmployee);
-
   // Latest GMC enrollment (for new joinees)
   const latestGmcEnroll = gmcEnrolls.slice().sort((a, b) => {
     const rank = (s) => s === 'APPROVED' ? 3 : s === 'SUBMITTED' ? 2 : s === 'REJECTED' ? 1 : 0;
@@ -5057,30 +5053,6 @@ function initApp() {
 }
 window.initApp = initApp;
 
-// ─── Employee nav gating: Enrollment vs Renewal ──────────────────────────────
-// Rule (per business spec):
-//   • gmc_inclusion_date NULL            → not eligible → hide BOTH
-//   • in insurance_dependents (existing) → Renewal only → hide Enrollment
-//   • else (eligible new joinee)         → Enrollment only → hide Renewal
-// Toggles both the sidebar items and the mobile bottom-nav buttons (both carry data-page).
-function applyRenewalNavGating(eligible, isExisting) {
-  if (state.role !== 'employee') return;
-  const setShown = (page, shown) =>
-    document.querySelectorAll(`[data-page="${page}"]`).forEach(el => { el.style.display = shown ? '' : 'none'; });
-
-  if (!eligible) {
-    setShown('gmc_enrollment_form', false);
-    setShown('gmc_renewal', false);
-  } else if (isExisting) {
-    setShown('gmc_enrollment_form', false);
-    setShown('gmc_renewal', true);
-  } else {
-    setShown('gmc_enrollment_form', true);
-    setShown('gmc_renewal', false);
-  }
-}
-window.applyRenewalNavGating = applyRenewalNavGating;
-
 // ═══════════════════════════════════════════════════════════════════════════════
 // ─── GMC RENEWAL 2026-27 — Employee renewal flow ─────────────────────────────
 // 3-step wizard. Page 3 has Sum Insured selection ON TOP and Dependents BELOW.
@@ -5414,21 +5386,9 @@ function renderRenewalStep3() {
       <div style="padding:16px;background:var(--surface2);border-radius:12px;margin-bottom:20px">
         <div style="font-weight:700;font-size:14px;margin-bottom:10px">② Dependents</div>
         <div style="font-size:13px;color:var(--text2);margin-bottom:12px">
-          You can <b>edit name/DOB/gender</b> or <b>delete</b> existing dependents.
-          New members can be added <b>only</b> for a <b>newborn</b> (within 30 days of birth) or a
-          <b>newly-married spouse</b> (within 30 days of marriage).
+          You can <b>edit name/DOB/gender</b> or <b>delete</b> existing dependents. <b>You cannot add new dependents.</b>
           Once you delete a dependent and submit, they cannot be re-added in future renewals.
         </div>
-        ${(() => {
-          const hasSpouse = deps.some(d => d.relation === 'Spouse' && d.action !== 'DELETE');
-          return `
-          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
-            <button class="btn btn-secondary btn-sm" onclick="renewalAddDependent('NEWBORN')">👶 Add Newborn</button>
-            ${hasSpouse ? '' : `<button class="btn btn-secondary btn-sm" onclick="renewalAddDependent('NEW_SPOUSE')">💍 Add New Spouse</button>`}
-            <span style="font-size:12px;color:var(--text3);align-self:center">Marital status:
-              <b>${hasSpouse ? 'Married' : (renewalState.eligibility?.employee?.marital_status || '—')}</b></span>
-          </div>`;
-        })()}
         ${deps.length === 0
           ? `<div style="padding:20px;text-align:center;color:var(--text3);background:white;border-radius:8px">No dependents on record for this renewal.</div>`
           : `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px">
@@ -5647,88 +5607,6 @@ function renewalAskDeleteReason(dep) {
   });
 }
 
-// ─── Add a newborn / newly-married spouse ────────────────────────────────────
-async function renewalAddDependent(type) {
-  const empId = renewalState.eligibility.employee.emp_id;
-  const isSpouse = type === 'NEW_SPOUSE';
-  const title = isSpouse ? '💍 Add New Spouse' : '👶 Add Newborn';
-  const note  = isSpouse
-    ? 'Allowed only within <b>30 days of marriage</b>. Spouse must be at least 18 years old.'
-    : 'Allowed only within <b>30 days of birth</b>.';
-
-  const html = `
-    <div style="position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:2000;
-                display:flex;align-items:center;justify-content:center;padding:20px" id="renewal-add-modal">
-      <div style="background:white;border-radius:14px;padding:24px;max-width:520px;width:100%">
-        <h3 style="margin:0 0 8px 0">${title}</h3>
-        <div style="background:#eff6ff;border-left:4px solid #3b82f6;padding:10px 12px;border-radius:8px;font-size:12px;color:#1e3a8a;margin-bottom:14px">${note}</div>
-        <div class="form-grid">
-          ${isSpouse ? '' : `
-          <div class="form-group">
-            <label>Relation *</label>
-            <select id="rad-rel">
-              <option value="Son">Son</option>
-              <option value="Daughter">Daughter</option>
-            </select>
-          </div>`}
-          <div class="form-group">
-            <label>Name *</label>
-            <input type="text" id="rad-name" placeholder="Full name">
-          </div>
-          <div class="form-group">
-            <label>Date of Birth *</label>
-            <input type="date" id="rad-dob">
-          </div>
-          <div class="form-group">
-            <label>Gender</label>
-            <select id="rad-gender">
-              <option value="">—</option>
-              <option value="Male">Male</option>
-              <option value="Female">Female</option>
-            </select>
-          </div>
-          ${isSpouse ? `
-          <div class="form-group">
-            <label>Marriage Date *</label>
-            <input type="date" id="rad-marriage">
-          </div>` : ''}
-        </div>
-        <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end">
-          <button class="btn btn-secondary" onclick="document.getElementById('renewal-add-modal').remove()">Cancel</button>
-          <button class="btn btn-primary" id="rad-save">Add</button>
-        </div>
-      </div>
-    </div>`;
-  document.body.insertAdjacentHTML('beforeend', html);
-
-  document.getElementById('rad-save').onclick = async () => {
-    const name = document.getElementById('rad-name').value.trim();
-    const dob  = document.getElementById('rad-dob').value.trim();
-    const gen  = document.getElementById('rad-gender').value;
-    if (!name) return showToast('Name is required', 'error');
-    if (!dob)  return showToast('Date of birth is required', 'error');
-
-    const body = { addition_type: type, insured_name: name, date_of_birth: dob, gender: gen || null };
-    if (isSpouse) {
-      const marriage = document.getElementById('rad-marriage').value.trim();
-      if (!marriage) return showToast('Marriage date is required', 'error');
-      body.relationship = 'Spouse';
-      body.marriage_date = marriage;
-    } else {
-      body.relationship = document.getElementById('rad-rel').value;
-    }
-
-    try {
-      await renewal.addDependent(empId, body);
-      const dRes = await renewal.dependents(empId);
-      renewalState.dependents = dRes.data || [];
-      showToast(isSpouse ? 'Spouse added' : 'Newborn added', 'success');
-      document.getElementById('renewal-add-modal').remove();
-      renderRenewalStep();        // re-render Step 3 (also refreshes the quote)
-    } catch (e) { showToast(e.message, 'error'); }
-  };
-}
-
 async function renewalEditDep(id) {
   const d = renewalState.dependents.find(x => x.id === id);
   if (!d) return;
@@ -5903,7 +5781,6 @@ window.refreshRenewalQuote  = refreshRenewalQuote;
 window.renewalEditDep       = renewalEditDep;
 window.renewalDeleteDep     = renewalDeleteDep;
 window.renewalRestoreDep    = renewalRestoreDep;
-window.renewalAddDependent  = renewalAddDependent;
 window.submitRenewal        = submitRenewal;
 window.renewalState         = renewalState;
 
