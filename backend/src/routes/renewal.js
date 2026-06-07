@@ -17,10 +17,8 @@ const EMI_MONTHS              = 6;
 const NEW_SPOUSE_DAYS_LIMIT   = 30;
 const NEWBORN_DAYS_LIMIT      = 30;
 const MIN_SPOUSE_AGE          = 18;
-const WINDOW_START_DATE       = '2026-06-07';  // renewal window opens
-const WINDOW_DEADLINE_DATE    = '2026-06-30';  // renewal window closes
 
-const SUM_INSURED_LADDER = [200000, 300000, 400000, 500000, 600000, 700000, 1000000, 2000000];
+const SUM_INSURED_LADDER = [200000, 300000, 400000, 500000, 600000, 700000, 1000000];
 const EDITABLE_DEP_FIELDS = new Set(['insured_name', 'date_of_birth', 'gender']);
 const DELETE_REASONS = new Set(['EXPIRED', 'NOT_CONTINUING', 'TYPO']);
 
@@ -29,7 +27,7 @@ let enrollmentWindowCache = {
   window_title: 'GMC Renewal 2026-27',
   policy_start_date: POLICY_START_DATE,
   policy_end_date: POLICY_END_DATE,
-  deadline_date: WINDOW_DEADLINE_DATE,
+  deadline_date: '2026-07-15',
   last_updated: null,
 };
 
@@ -49,7 +47,7 @@ async function initializeEnrollmentWindow() {
         window_title: data.window_title || 'GMC Renewal 2026-27',
         policy_start_date: data.policy_start_date || POLICY_START_DATE,
         policy_end_date: data.policy_end_date || POLICY_END_DATE,
-        deadline_date: data.deadline_date || WINDOW_DEADLINE_DATE,
+        deadline_date: data.deadline_date || '2026-07-15',
         last_updated: data.updated_at || new Date().toISOString(),
       };
       console.log('[renewal] Window initialized:', enrollmentWindowCache.window_open);
@@ -73,7 +71,7 @@ async function startEnrollmentWindowPolling() {
           window_title: data.window_title || 'GMC Renewal 2026-27',
           policy_start_date: data.policy_start_date || POLICY_START_DATE,
           policy_end_date: data.policy_end_date || POLICY_END_DATE,
-          deadline_date: data.deadline_date || WINDOW_DEADLINE_DATE,
+          deadline_date: data.deadline_date || '2026-07-15',
           last_updated: data.updated_at || new Date().toISOString(),
         };
         if (oldStatus !== enrollmentWindowCache.window_open)
@@ -89,7 +87,7 @@ function isWindowOpen() { return enrollmentWindowCache.window_open === true; }
 
 function getEnrollmentWindow() {
   return {
-    open_at: WINDOW_START_DATE,
+    open_at: enrollmentWindowCache.last_updated || new Date().toISOString(),
     close_at: enrollmentWindowCache.deadline_date,
     policy_start_date: enrollmentWindowCache.policy_start_date,
     policy_end_date: enrollmentWindowCache.policy_end_date,
@@ -345,97 +343,6 @@ router.post('/dependents/:id/restore', async (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// POST /api/renewal/dependents/:empId  — ADD a newborn or newly-married spouse
-// body: { addition_type:'NEWBORN'|'NEW_SPOUSE', insured_name, gender,
-//         date_of_birth, relationship?, marriage_date? }
-// ─────────────────────────────────────────────────────────────────────────────
-router.post('/dependents/:empId', async (req, res) => {
-  const empIdParam = (req.params.empId || '').toString().toUpperCase();
-  if (!empIdParam) return res.status(400).json({ error: 'emp_id required' });
-  if (!requireOwnEmpOrAdmin(req, empIdParam)) return res.status(403).json({ error: 'Access denied' });
-
-  const { data: locked } = await supabase
-    .from('renewal_members_2026_27')
-    .select('id').eq('emp_id', empIdParam).eq('is_locked', true).limit(1);
-  if (locked && locked.length) {
-    return res.status(409).json({ error: 'Renewal already submitted; members can no longer be changed.' });
-  }
-
-  const b = req.body || {};
-  const addition_type = b.addition_type;
-  const name = (b.insured_name || '').toString().trim();
-  const date_of_birth = b.date_of_birth;
-  let relationship = b.relationship;
-
-  if (!name) return res.status(400).json({ error: 'Name is required' });
-  if (!date_of_birth) return res.status(400).json({ error: 'Date of birth is required' });
-
-  const today = new Date();
-  const daysSince = (d) => Math.floor((today - new Date(d)) / (1000 * 60 * 60 * 24));
-
-  if (addition_type === 'NEWBORN') {
-    if (!['Son', 'Daughter'].includes(relationship)) {
-      return res.status(400).json({ error: 'Newborn must be added as Son or Daughter' });
-    }
-    const d = daysSince(date_of_birth);
-    if (d < 0) return res.status(400).json({ error: 'Birth date cannot be in the future' });
-    if (d > NEWBORN_DAYS_LIMIT) {
-      return res.status(400).json({ error: `A newborn can be added only within ${NEWBORN_DAYS_LIMIT} days of birth (${d} days have passed).` });
-    }
-  } else if (addition_type === 'NEW_SPOUSE') {
-    relationship = 'Spouse';
-    if (!b.marriage_date) return res.status(400).json({ error: 'Marriage date is required' });
-    const md = daysSince(b.marriage_date);
-    if (md < 0) return res.status(400).json({ error: 'Marriage date cannot be in the future' });
-    if (md > NEW_SPOUSE_DAYS_LIMIT) {
-      return res.status(400).json({ error: `A spouse can be added only within ${NEW_SPOUSE_DAYS_LIMIT} days of marriage (${md} days have passed).` });
-    }
-    if (daysSince(date_of_birth) < 6570) {  // matches DB chk_spouse_min_age (~18y)
-      return res.status(400).json({ error: `Spouse must be at least ${MIN_SPOUSE_AGE} years old` });
-    }
-    const { data: spouse } = await supabase
-      .from('renewal_members_2026_27')
-      .select('id').eq('emp_id', empIdParam).eq('relationship', 'Spouse').eq('action', 'KEEP').limit(1);
-    if (spouse && spouse.length) {
-      return res.status(409).json({ error: 'A spouse already exists on this policy.' });
-    }
-  } else {
-    return res.status(400).json({ error: 'addition_type must be NEWBORN or NEW_SPOUSE' });
-  }
-
-  const nowIso = new Date().toISOString();
-  const payload = {
-    emp_id: empIdParam, insured_name: name, relationship, gender: b.gender || null,
-    date_of_birth, action: 'KEEP', new_addition: true, addition_type, addition_date: nowIso,
-    marriage_date: addition_type === 'NEW_SPOUSE' ? b.marriage_date : null,
-    marital_status: addition_type === 'NEW_SPOUSE' ? 'Married' : null,
-    updated_at: nowIso,
-  };
-  const { data, error } = await supabase
-    .from('renewal_members_2026_27').insert(payload).select('*').single();
-  if (error) return res.status(400).json({ error: error.message });
-
-  if (addition_type === 'NEW_SPOUSE') {
-    await supabase.from('renewal_members_2026_27')
-      .update({ marital_status: 'Married', updated_at: nowIso })
-      .eq('emp_id', empIdParam).eq('relationship', 'Self');
-  }
-  res.json({ success: true, dependent: mapDependentRow(data) });
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-// 2026-27 projected CTC GMC (future-period figure, NOT the 25-26 total).
-// Source: vw_renewal_ctc_gmc → latest employee_ctc_gmc_increment.new_ctc_gmc_per_month
-// (else employees.ctc_gmc_per_month) × 12.
-async function fetchProjectedCtc2627(empIdParam) {
-  const { data } = await supabase
-    .from('vw_renewal_ctc_gmc')
-    .select('ctc_gmc_26_27_projected')
-    .eq('emp_id', empIdParam).maybeSingle();
-  return Number(data?.ctc_gmc_26_27_projected || 0);
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Shared premium calculation. Self comes ONLY from the employee record;
 // members table is queried with relationship != 'Self' to avoid double-counting.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -475,11 +382,9 @@ async function computeQuote(empIdParam, sumInsured) {
 
   const { data: bal } = await supabase
     .from('vw_employee_net_balance_2025_26')
-    .select('net_balance').eq('emp_id', empIdParam).maybeSingle();
-  const ctc     = await fetchProjectedCtc2627(empIdParam);  // 26-27 estimate (monthly × 12)
-  const closing = Number(bal?.net_balance || 0);            // 25-26 carry-forward
-  // Consolidate 25-26 balance + 26-27 CTC, then deduct 26-27 premium.
-  // Sep-2026 settles the 25-26 portion; Sep-2027 = the remaining 26-27 excess.
+    .select('total_ctc_gmc, net_balance').eq('emp_id', empIdParam).maybeSingle();
+  const ctc     = Number(bal?.total_ctc_gmc || 0);
+  const closing = Number(bal?.net_balance || 0);
   const net     = closing + ctc - totalPremium;
   const refund_sep_26    = Math.max(0, Math.min(closing, net));
   const refund_sep_27    = Math.max(0, net - refund_sep_26);
@@ -551,10 +456,8 @@ router.post('/submit', async (req, res) => {
     .select('emp_id, emp_name, date_of_birth, gender, email_id, mobile_number, designation, unit, department, gmc_inclusion_date')
     .eq('emp_id', empIdParam).single();
   if (!emp) return res.status(404).json({ error: 'Employee not found' });
-  // Contact details are preferred (for the insurer + confirmation email) but
-  // NOT mandatory — do not block submission if they are missing.
   if (!emp.mobile_number || !emp.email_id) {
-    console.warn(`[renewal] submit with missing contact for ${empIdParam} (mobile:${!!emp.mobile_number} email:${!!emp.email_id})`);
+    return res.status(400).json({ error: 'Mobile number and email are required. Please contact HR.' });
   }
 
   const { data: keepMembers } = await supabase
@@ -613,8 +516,8 @@ router.post('/submit', async (req, res) => {
 
   const { data: bal } = await supabase
     .from('vw_employee_net_balance_2025_26')
-    .select('net_balance').eq('emp_id', empIdParam).maybeSingle();
-  const ctc     = await fetchProjectedCtc2627(empIdParam);  // 26-27 estimate (monthly × 12)
+    .select('total_ctc_gmc, net_balance').eq('emp_id', empIdParam).maybeSingle();
+  const ctc     = Number(bal?.total_ctc_gmc || 0);
   const closing = Number(bal?.net_balance || 0);
   const net     = closing + ctc - totalPremium;
   const refund_sep_26    = Math.max(0, Math.min(closing, net));
