@@ -283,7 +283,6 @@ export const renewal = {
     return apiFetch(`/renewal/eligibility${qs}`);
   },
   dependents: (empId) => apiFetch(`/renewal/dependents/${empId}`),
-  addDependent:     (empId, body)      => apiFetch(`/renewal/dependents/${empId}`,   { method: 'POST',  body: JSON.stringify(body) }),
   editDependent:    (id, body)         => apiFetch(`/renewal/dependents/${id}`,        { method: 'PATCH', body: JSON.stringify(body) }),
   deleteDependent:  (id, reason)       => apiFetch(`/renewal/dependents/${id}/delete`, { method: 'POST',  body: JSON.stringify({ reason }) }),
   restoreDependent: (id)               => apiFetch(`/renewal/dependents/${id}/restore`,{ method: 'POST' }),
