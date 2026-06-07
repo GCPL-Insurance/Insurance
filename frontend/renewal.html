@@ -1,0 +1,1226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GMC Renewal 2026-27 | GCPL Insurance Portal</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: #f5f7fa;
+            color: #333;
+            line-height: 1.6;
+        }
+
+        .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+
+        header {
+            background: linear-gradient(135deg, #1e40af 0%, #1e3a8a 100%);
+            color: white;
+            padding: 30px 0;
+            margin-bottom: 30px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+
+        header h1 {
+            font-size: 2em;
+            margin-bottom: 8px;
+        }
+
+        header .subtitle {
+            font-size: 1em;
+            opacity: 0.95;
+        }
+
+        .window-banner {
+            background: #f59e0b;
+            color: #fff;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 25px;
+            border-left: 4px solid #d97706;
+        }
+
+        .window-banner.closed {
+            background: #ef4444;
+            border-left-color: #dc2626;
+        }
+
+        .window-banner.open {
+            background: #10b981;
+            border-left-color: #059669;
+        }
+
+        .tabs {
+            display: flex;
+            gap: 0;
+            margin-bottom: 30px;
+            border-bottom: 2px solid #e5e7eb;
+        }
+
+        .tab-btn {
+            padding: 15px 25px;
+            border: none;
+            background: none;
+            cursor: pointer;
+            font-size: 1em;
+            font-weight: 500;
+            color: #666;
+            border-bottom: 3px solid transparent;
+            transition: all 0.3s;
+        }
+
+        .tab-btn:hover {
+            color: #1e40af;
+            background: #f0f5ff;
+        }
+
+        .tab-btn.active {
+            color: #1e40af;
+            border-bottom-color: #1e40af;
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .card {
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            padding: 25px;
+            margin-bottom: 20px;
+        }
+
+        .card h2 {
+            color: #1e40af;
+            font-size: 1.5em;
+            margin-bottom: 15px;
+            border-bottom: 2px solid #e5e7eb;
+            padding-bottom: 12px;
+        }
+
+        .section {
+            margin-bottom: 25px;
+        }
+
+        .section h3 {
+            color: #1e40af;
+            font-size: 1.1em;
+            margin-bottom: 12px;
+        }
+
+        .info-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .info-item {
+            background: #f9fafb;
+            padding: 12px;
+            border-radius: 6px;
+            border-left: 3px solid #1e40af;
+        }
+
+        .info-label {
+            font-size: 0.85em;
+            color: #666;
+            text-transform: uppercase;
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+
+        .info-value {
+            font-size: 1.1em;
+            color: #000;
+            font-weight: 500;
+        }
+
+        .member-card {
+            background: #f9fafb;
+            border: 1px solid #e5e7eb;
+            border-radius: 6px;
+            padding: 15px;
+            margin-bottom: 12px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            transition: all 0.2s;
+        }
+
+        .member-card:hover {
+            background: #f3f4f6;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        }
+
+        .member-info {
+            flex: 1;
+        }
+
+        .member-name {
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+
+        .member-relation {
+            font-size: 0.9em;
+            color: #666;
+        }
+
+        .member-status {
+            padding: 4px 10px;
+            border-radius: 4px;
+            font-size: 0.85em;
+            font-weight: 600;
+            margin-left: 10px;
+        }
+
+        .status-keep {
+            background: #d1fae5;
+            color: #065f46;
+        }
+
+        .status-delete {
+            background: #fee2e2;
+            color: #7f1d1d;
+        }
+
+        .status-new {
+            background: #dbeafe;
+            color: #0c4a6e;
+        }
+
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 500;
+            font-size: 0.95em;
+            transition: all 0.2s;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .btn-primary {
+            background: #1e40af;
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #1e3a8a;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(30, 64, 175, 0.2);
+        }
+
+        .btn-primary:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .btn-secondary {
+            background: #e5e7eb;
+            color: #333;
+        }
+
+        .btn-secondary:hover {
+            background: #d1d5db;
+        }
+
+        .btn-danger {
+            background: #ef4444;
+            color: white;
+        }
+
+        .btn-danger:hover {
+            background: #dc2626;
+        }
+
+        .btn-small {
+            padding: 6px 12px;
+            font-size: 0.85em;
+        }
+
+        .form-group {
+            margin-bottom: 15px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 6px;
+            color: #333;
+            font-weight: 500;
+        }
+
+        input, select, textarea {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            font-size: 1em;
+            font-family: inherit;
+        }
+
+        input:focus, select:focus, textarea:focus {
+            outline: none;
+            border-color: #1e40af;
+            box-shadow: 0 0 0 3px rgba(30, 64, 175, 0.1);
+        }
+
+        .form-row {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 15px;
+        }
+
+        .table-responsive {
+            overflow-x: auto;
+            margin-bottom: 20px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        th {
+            background: #f3f4f6;
+            padding: 12px;
+            text-align: left;
+            font-weight: 600;
+            border-bottom: 2px solid #e5e7eb;
+        }
+
+        td {
+            padding: 12px;
+            border-bottom: 1px solid #e5e7eb;
+        }
+
+        .quote-table {
+            width: 100%;
+            margin-top: 15px;
+        }
+
+        .quote-table tr:last-child td {
+            border-bottom: 2px solid #1e40af;
+            font-weight: 600;
+        }
+
+        .alert {
+            padding: 15px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+            border-left: 4px solid;
+        }
+
+        .alert-info {
+            background: #dbeafe;
+            border-left-color: #0284c7;
+            color: #0c4a6e;
+        }
+
+        .alert-warning {
+            background: #fef3c7;
+            border-left-color: #f59e0b;
+            color: #92400e;
+        }
+
+        .alert-danger {
+            background: #fee2e2;
+            border-left-color: #dc2626;
+            color: #7f1d1d;
+        }
+
+        .alert-success {
+            background: #d1fae5;
+            border-left-color: #059669;
+            color: #065f46;
+        }
+
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.5);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal.active {
+            display: flex;
+        }
+
+        .modal-content {
+            background: white;
+            border-radius: 8px;
+            max-width: 600px;
+            width: 90%;
+            max-height: 80vh;
+            overflow-y: auto;
+            padding: 25px;
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            border-bottom: 2px solid #e5e7eb;
+            padding-bottom: 15px;
+        }
+
+        .modal-header h2 {
+            color: #1e40af;
+        }
+
+        .close-btn {
+            background: none;
+            border: none;
+            font-size: 1.5em;
+            cursor: pointer;
+            color: #666;
+        }
+
+        .close-btn:hover {
+            color: #000;
+        }
+
+        .action-buttons {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+            justify-content: flex-end;
+        }
+
+        .spinner {
+            border: 3px solid #e5e7eb;
+            border-top: 3px solid #1e40af;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .terms-box {
+            background: #f9fafb;
+            border: 1px solid #e5e7eb;
+            border-radius: 6px;
+            padding: 20px;
+            max-height: 300px;
+            overflow-y: auto;
+            margin: 15px 0;
+            font-size: 0.95em;
+            line-height: 1.6;
+        }
+
+        .checkbox-wrapper {
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            margin: 15px 0;
+        }
+
+        input[type="checkbox"] {
+            width: auto;
+            margin-top: 4px;
+            cursor: pointer;
+        }
+
+        .success-message {
+            background: #d1fae5;
+            border-left: 4px solid #059669;
+            color: #065f46;
+            padding: 20px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+        }
+
+        .error-message {
+            background: #fee2e2;
+            border-left: 4px solid #dc2626;
+            color: #7f1d1d;
+            padding: 20px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+        }
+
+        .footer {
+            background: #f9fafb;
+            border-top: 1px solid #e5e7eb;
+            padding: 20px;
+            text-align: center;
+            color: #666;
+            margin-top: 40px;
+        }
+
+        @media (max-width: 768px) {
+            .container { padding: 12px; }
+            header h1 { font-size: 1.5em; }
+            .tabs { flex-wrap: wrap; }
+            .tab-btn { padding: 12px 15px; font-size: 0.9em; }
+            .info-grid { grid-template-columns: 1fr; }
+            .form-row { grid-template-columns: 1fr; }
+            .action-buttons { flex-direction: column; }
+            .btn { width: 100%; justify-content: center; }
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+        }
+
+        .timestamp {
+            font-size: 0.85em;
+            color: #999;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+
+<header>
+    <div class="container">
+        <h1>🏥 GMC Health Insurance Renewal 2026-27</h1>
+        <p class="subtitle">Insurance Period: 24-JUL-2026 to 23-JUL-2027</p>
+    </div>
+</header>
+
+<div class="container">
+
+    <!-- Window Status Banner -->
+    <div id="windowBanner" class="window-banner open">
+        <strong>📅 Enrollment Window Open</strong><br>
+        Deadline: <span id="deadlineDate">2026-07-15</span> | 
+        <span id="windowStatus">Accepting enrollments</span>
+    </div>
+
+    <!-- Tab Navigation -->
+    <div class="tabs">
+        <button class="tab-btn active" onclick="switchTab('terms')">📋 Terms & Conditions</button>
+        <button class="tab-btn" onclick="switchTab('eligibility')">✅ Your Eligibility</button>
+        <button class="tab-btn" onclick="switchTab('members')">👨‍👩‍👧 Family Members</button>
+        <button class="tab-btn" onclick="switchTab('quote')">💰 Premium Quote</button>
+        <button class="tab-btn" onclick="switchTab('submit')">📤 Confirm & Submit</button>
+    </div>
+
+    <!-- Tab 1: Terms & Conditions -->
+    <div id="terms" class="tab-content active">
+        <div class="card">
+            <h2>Terms & Conditions</h2>
+            
+            <div class="section">
+                <h3>Insurance Coverage Period</h3>
+                <div class="info-grid">
+                    <div class="info-item">
+                        <div class="info-label">Policy Start Date</div>
+                        <div class="info-value">24th July 2026</div>
+                    </div>
+                    <div class="info-item">
+                        <div class="info-label">Policy End Date</div>
+                        <div class="info-value">23rd July 2027</div>
+                    </div>
+                </div>
+                <p style="color: #666; line-height: 1.8;">
+                    Your health insurance coverage will be effective from <strong>24th July 2026</strong> and will 
+                    remain valid until <strong>23rd July 2027</strong>. All claims must be initiated during this 
+                    period to be covered under this policy.
+                </p>
+            </div>
+
+            <div class="section">
+                <h3>Family Member Coverage</h3>
+                <ul style="margin-left: 20px; color: #555; line-height: 1.8;">
+                    <li><strong>Self:</strong> Primary insured member (mandatory)</li>
+                    <li><strong>Spouse:</strong> Can be added/renewed if married</li>
+                    <li><strong>Children:</strong> Sons and daughters up to 25 years of age</li>
+                    <li><strong>Parents:</strong> Father and Mother (if applicable)</li>
+                    <li><strong>In-Laws:</strong> Father-in-Law and Mother-in-Law (if applicable)</li>
+                </ul>
+            </div>
+
+            <div class="section">
+                <h3>Important Rules for New Additions</h3>
+                <div class="alert alert-warning">
+                    <strong>📌 New Spouse Addition:</strong> Can be added only within 30 days from the marriage date.
+                    Minimum age requirement: 18 years.
+                </div>
+                <div class="alert alert-warning">
+                    <strong>👶 Newborn Addition:</strong> Can be added only within 30 days from the birth date.
+                    Birth certificate required.
+                </div>
+                <div class="alert alert-danger">
+                    <strong>⚠️ Age 25 Cutoff:</strong> Children completing 25 years of age on 24-JUL-2026 will be 
+                    automatically removed from coverage. Age is calculated as on the policy start date.
+                </div>
+            </div>
+
+            <div class="section">
+                <h3>Sum Insured Guidelines</h3>
+                <p style="color: #666; margin-bottom: 12px;">
+                    Your Sum Insured (coverage amount) <strong>cannot be decreased from the previous year</strong>. 
+                    You may keep the same amount or select a higher amount.
+                </p>
+                <p style="color: #666;">
+                    Available Sum Insured options: ₹2 Lac, ₹3 Lac, ₹4 Lac, ₹5 Lac, ₹6 Lac, ₹7 Lac, ₹10 Lac
+                </p>
+            </div>
+
+            <div class="section">
+                <h3>Correction & Deletion Policy</h3>
+                <ul style="margin-left: 20px; color: #555; line-height: 1.8;">
+                    <li>You can correct minor typos (name spelling, gender, DOB) in existing member details</li>
+                    <li>You can delete a dependent member with remarks (reason for deletion)</li>
+                    <li>After final submission, further corrections require admin approval</li>
+                </ul>
+            </div>
+
+            <div class="section">
+                <h3>Employer Contribution & EMI</h3>
+                <p style="color: #666; line-height: 1.8;">
+                    If the selected premium exceeds the employer's GMC contribution, the balance will be 
+                    deducted from your salary as EMI over 6 months, or provided as a refund if the 
+                    contribution exceeds the premium.
+                </p>
+            </div>
+
+            <div class="alert alert-info">
+                <strong>ℹ️ Your Acknowledgment:</strong> By proceeding with enrollment, you acknowledge that 
+                you have read and understood all the terms and conditions mentioned above.
+            </div>
+        </div>
+    </div>
+
+    <!-- Tab 2: Eligibility -->
+    <div id="eligibility" class="tab-content">
+        <div class="card">
+            <h2>Your Eligibility Status</h2>
+            <div id="eligibilityContent" class="loading">
+                <div class="spinner"></div>
+                <p>Loading your eligibility information...</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tab 3: Family Members -->
+    <div id="members" class="tab-content">
+        <div class="card">
+            <h2>Family Members</h2>
+            <p style="color: #666; margin-bottom: 20px;">
+                Review your family members below. You can edit details, mark for deletion, or add new members.
+            </p>
+            <div id="membersContent" class="loading">
+                <div class="spinner"></div>
+                <p>Loading family members...</p>
+            </div>
+            <div style="margin-top: 20px;">
+                <button class="btn btn-primary" onclick="showAddMemberModal()">➕ Add New Member</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tab 4: Premium Quote -->
+    <div id="quote" class="tab-content">
+        <div class="card">
+            <h2>Premium Quote Calculator</h2>
+            <div class="section">
+                <label style="font-weight: 600;">Select Sum Insured:</label>
+                <select id="sumInsuredSelect" onchange="calculateQuote()" style="margin-bottom: 20px;">
+                    <option value="">-- Choose Sum Insured --</option>
+                    <option value="200000">₹2,00,000</option>
+                    <option value="300000">₹3,00,000</option>
+                    <option value="400000">₹4,00,000</option>
+                    <option value="500000">₹5,00,000</option>
+                    <option value="600000">₹6,00,000</option>
+                    <option value="700000">₹7,00,000</option>
+                    <option value="1000000">₹10,00,000</option>
+                </select>
+            </div>
+            <div id="quoteContent">
+                <!-- Quote will be loaded here -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Tab 5: Submit -->
+    <div id="submit" class="tab-content">
+        <div class="card">
+            <h2>Confirm & Submit Enrollment</h2>
+            <div id="submitContent" class="loading">
+                <div class="spinner"></div>
+                <p>Loading submission details...</p>
+            </div>
+        </div>
+    </div>
+
+</div>
+
+<!-- Add/Edit Member Modal -->
+<div id="memberModal" class="modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2 id="memberModalTitle">Add New Member</h2>
+            <button class="close-btn" onclick="closeMemberModal()">×</button>
+        </div>
+        <form id="memberForm">
+            <div class="form-group">
+                <label>Relationship *</label>
+                <select id="memberRelationship" required>
+                    <option value="">-- Select Relationship --</option>
+                    <option value="Spouse">Spouse</option>
+                    <option value="Son">Son</option>
+                    <option value="Daughter">Daughter</option>
+                    <option value="Father">Father</option>
+                    <option value="Mother">Mother</option>
+                    <option value="Father-in-Law">Father-in-Law</option>
+                    <option value="Mother-in-Law">Mother-in-Law</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Full Name *</label>
+                <input type="text" id="memberName" required placeholder="Full name as per ID">
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Gender *</label>
+                    <select id="memberGender" required>
+                        <option value="">-- Select --</option>
+                        <option value="M">Male</option>
+                        <option value="F">Female</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Date of Birth *</label>
+                    <input type="date" id="memberDOB" required>
+                </div>
+            </div>
+            <div id="spouseFields" style="display: none;">
+                <div class="form-group">
+                    <label>Marriage Date *</label>
+                    <input type="date" id="memberMarriageDate">
+                </div>
+            </div>
+            <div class="form-group" style="display: none;" id="additionTypeGroup">
+                <label>Addition Type *</label>
+                <select id="memberAdditionType">
+                    <option value="">-- Select --</option>
+                    <option value="NEW_SPOUSE">New Spouse (married within 30 days)</option>
+                    <option value="NEWBORN">Newborn (born within 30 days)</option>
+                </select>
+            </div>
+            <div class="action-buttons">
+                <button type="button" class="btn btn-secondary" onclick="closeMemberModal()">Cancel</button>
+                <button type="submit" class="btn btn-primary">Save Member</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="footer">
+    <p>GMC Health Insurance Renewal Portal | 2026-27 | GCPL Insurance Management</p>
+    <p style="margin-top: 10px; font-size: 0.9em;">
+        For support, contact HR Department | Email: hr@gcpl.com | Phone: +91-XXXX-XXXXXX
+    </p>
+</div>
+
+<script>
+    const API_BASE = '/api';
+    let currentEmployee = null;
+    let currentMembers = [];
+    let currentQuote = null;
+    let selectedSumInsured = null;
+    let editingMemberId = null;
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // TAB SWITCHING
+    // ─────────────────────────────────────────────────────────────────────────
+    function switchTab(tabName) {
+        document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+        document.getElementById(tabName).classList.add('active');
+        event.target.classList.add('active');
+
+        if (tabName === 'eligibility') loadEligibility();
+        else if (tabName === 'members') loadMembers();
+        else if (tabName === 'quote') prepareQuoteTab();
+        else if (tabName === 'submit') prepareSubmitTab();
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // LOAD ELIGIBILITY
+    // ─────────────────────────────────────────────────────────────────────────
+    async function loadEligibility() {
+        try {
+            const res = await fetch(`${API_BASE}/renewal/eligibility`);
+            const data = await res.json();
+            currentEmployee = data.employee;
+
+            let html = '';
+
+            if (!data.eligible) {
+                html = `
+                    <div class="alert alert-danger">
+                        <strong>❌ Not Eligible for GMC Renewal</strong><br>
+                        Reason: ${data.reason === 'INACTIVE' ? 'Your employment is inactive.' : 
+                                   data.reason === 'NO_GMC_INCLUSION_DATE' ? 'GMC inclusion date not found. Please contact HR.' :
+                                   'You are not eligible for GMC coverage.'}
+                    </div>
+                `;
+            } else {
+                html = `
+                    <div class="alert alert-success">
+                        <strong>✅ You are eligible for renewal</strong><br>
+                        ${data.is_existing_employee ? 'You are an existing GMC member and can renew coverage.' : 
+                          'You are a new joinee and can enroll in GMC.'}
+                    </div>
+
+                    <div class="section">
+                        <h3>Personal Information</h3>
+                        <div class="info-grid">
+                            <div class="info-item">
+                                <div class="info-label">Employee ID</div>
+                                <div class="info-value">${data.employee.emp_id}</div>
+                            </div>
+                            <div class="info-item">
+                                <div class="info-label">Name</div>
+                                <div class="info-value">${data.employee.emp_name}</div>
+                            </div>
+                            <div class="info-item">
+                                <div class="info-label">Department</div>
+                                <div class="info-value">${data.employee.department || 'N/A'}</div>
+                            </div>
+                            <div class="info-item">
+                                <div class="info-label">Email</div>
+                                <div class="info-value">${data.employee.email_id}</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="section">
+                        <h3>Previous Year Financial Summary (2025-26)</h3>
+                        <div class="info-grid">
+                            <div class="info-item">
+                                <div class="info-label">Total CTC (GMC)</div>
+                                <div class="info-value">₹${(data.calc.ctc_gmc_25_26).toLocaleString('en-IN')}</div>
+                            </div>
+                            <div class="info-item">
+                                <div class="info-label">Opening Balance</div>
+                                <div class="info-value">₹${(data.calc.opening_balance_25_26).toLocaleString('en-IN')}</div>
+                            </div>
+                            <div class="info-item">
+                                <div class="info-label">Total Premium Paid</div>
+                                <div class="info-value">₹${(data.calc.premium_25_26).toLocaleString('en-IN')}</div>
+                            </div>
+                            <div class="info-item">
+                                <div class="info-label">Closing Balance</div>
+                                <div class="info-value" style="color: ${data.calc.closing_balance_25_26 >= 0 ? '#10b981' : '#ef4444'};">
+                                    ₹${(data.calc.closing_balance_25_26).toLocaleString('en-IN')}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="section">
+                        <h3>Sum Insured Information</h3>
+                        <div class="info-grid">
+                            <div class="info-item">
+                                <div class="info-label">Previous Year (2025-26)</div>
+                                <div class="info-value">₹${(data.previous_sum_insured).toLocaleString('en-IN')}</div>
+                            </div>
+                        </div>
+                        <p style="color: #666; margin-top: 10px;">
+                            ⚠️ <strong>Important:</strong> Your new Sum Insured must be equal to or greater than 
+                            the previous year (₹${(data.previous_sum_insured).toLocaleString('en-IN')}). Downgrades are not permitted.
+                        </p>
+                    </div>
+
+                    ${data.validation_errors.length > 0 ? `
+                        <div class="alert alert-warning">
+                            <strong>⚠️ Missing Information:</strong>
+                            <ul style="margin: 10px 0 0 20px;">
+                                ${data.validation_errors.map(e => `<li>${e.message}</li>`).join('')}
+                            </ul>
+                            Please update your profile before submitting renewal.
+                        </div>
+                    ` : ''}
+                `;
+            }
+
+            document.getElementById('eligibilityContent').innerHTML = html;
+        } catch (error) {
+            document.getElementById('eligibilityContent').innerHTML = 
+                `<div class="alert alert-danger">Error loading eligibility: ${error.message}</div>`;
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // LOAD MEMBERS
+    // ─────────────────────────────────────────────────────────────────────────
+    async function loadMembers() {
+        try {
+            const res = await fetch(`${API_BASE}/renewal/members/${currentEmployee?.emp_id || ''}`);
+            const data = await res.json();
+            currentMembers = data.members;
+
+            let html = '';
+            if (currentMembers.length === 0) {
+                html = '<div class="alert alert-info">No family members found. Add your first member.</div>';
+            } else {
+                html = currentMembers.map(m => `
+                    <div class="member-card">
+                        <div class="member-info">
+                            <div class="member-name">${m.insured_name}</div>
+                            <div class="member-relation">${m.relationship}</div>
+                            <div style="font-size: 0.85em; color: #999;">DOB: ${m.date_of_birth}</div>
+                        </div>
+                        <span class="member-status ${m.action === 'KEEP' ? 'status-keep' : m.action === 'DELETE' ? 'status-delete' : 'status-new'}">
+                            ${m.action === 'KEEP' ? 'Renewing' : m.action === 'DELETE' ? 'Removing' : 'New'}
+                        </span>
+                        <div style="display: flex; gap: 8px; margin-left: 15px;">
+                            <button class="btn btn-secondary btn-small" onclick="editMember(${m.id})">Edit</button>
+                            <button class="btn btn-danger btn-small" onclick="deleteMember(${m.id})">Delete</button>
+                        </div>
+                    </div>
+                `).join('');
+            }
+
+            document.getElementById('membersContent').innerHTML = html;
+        } catch (error) {
+            document.getElementById('membersContent').innerHTML = 
+                `<div class="alert alert-danger">Error loading members: ${error.message}</div>`;
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // MEMBER MODAL
+    // ─────────────────────────────────────────────────────────────────────────
+    function showAddMemberModal() {
+        editingMemberId = null;
+        document.getElementById('memberModalTitle').textContent = 'Add New Member';
+        document.getElementById('memberForm').reset();
+        document.getElementById('memberModal').classList.add('active');
+    }
+
+    function closeMemberModal() {
+        document.getElementById('memberModal').classList.remove('active');
+    }
+
+    document.getElementById('memberRelationship').addEventListener('change', function() {
+        const isSpouse = this.value === 'Spouse';
+        document.getElementById('spouseFields').style.display = isSpouse ? 'block' : 'none';
+    });
+
+    document.getElementById('memberForm').addEventListener('submit', async function(e) {
+        e.preventDefault();
+        const payload = {
+            id: editingMemberId,
+            relationship: document.getElementById('memberRelationship').value,
+            insured_name: document.getElementById('memberName').value,
+            gender: document.getElementById('memberGender').value,
+            date_of_birth: document.getElementById('memberDOB').value,
+            marriage_date: document.getElementById('memberMarriageDate').value || null,
+            action: 'KEEP',
+            addition_type: document.getElementById('memberAdditionType').value || null,
+        };
+
+        try {
+            const res = await fetch(`${API_BASE}/renewal/members/${currentEmployee.emp_id}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+            const data = await res.json();
+            if (res.ok) {
+                closeMemberModal();
+                loadMembers();
+            } else {
+                alert(`Error: ${data.error}`);
+            }
+        } catch (error) {
+            alert(`Error: ${error.message}`);
+        }
+    });
+
+    function editMember(id) {
+        const member = currentMembers.find(m => m.id === id);
+        if (!member) return;
+
+        editingMemberId = id;
+        document.getElementById('memberModalTitle').textContent = 'Edit Member';
+        document.getElementById('memberRelationship').value = member.relationship;
+        document.getElementById('memberName').value = member.insured_name;
+        document.getElementById('memberGender').value = member.gender;
+        document.getElementById('memberDOB').value = member.date_of_birth;
+        if (member.relationship === 'Spouse') {
+            document.getElementById('spouseFields').style.display = 'block';
+            document.getElementById('memberMarriageDate').value = member.marriage_date || '';
+        }
+        document.getElementById('memberModal').classList.add('active');
+    }
+
+    async function deleteMember(id) {
+        if (!confirm('Are you sure you want to delete this member?')) return;
+
+        try {
+            const res = await fetch(`${API_BASE}/renewal/members/${id}`, {
+                method: 'DELETE',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ emp_id: currentEmployee.emp_id }),
+            });
+            if (res.ok) {
+                loadMembers();
+            } else {
+                alert('Failed to delete member');
+            }
+        } catch (error) {
+            alert(`Error: ${error.message}`);
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // QUOTE CALCULATOR
+    // ─────────────────────────────────────────────────────────────────────────
+    async function calculateQuote() {
+        const siValue = document.getElementById('sumInsuredSelect').value;
+        if (!siValue) {
+            document.getElementById('quoteContent').innerHTML = '<p style="color: #666;">Select a Sum Insured to view premium details.</p>';
+            return;
+        }
+
+        try {
+            const res = await fetch(`${API_BASE}/renewal/quote/${currentEmployee.emp_id}?sum_insured=${siValue}`);
+            const data = await res.json();
+            selectedSumInsured = siValue;
+            currentQuote = data;
+
+            let html = `
+                <div class="section">
+                    <h3>Family Members & Premium Breakdown</h3>
+                    <div class="table-responsive">
+                        <table class="quote-table">
+                            <thead>
+                                <tr style="background: #f3f4f6;">
+                                    <th>Member Name</th>
+                                    <th>Relationship</th>
+                                    <th>Age (Policy Start)</th>
+                                    <th>Annual Premium</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${data.members.map(m => `
+                                    <tr>
+                                        <td>${m.member_name}</td>
+                                        <td>${m.relationship}</td>
+                                        <td>${m.age_at_policy_start}</td>
+                                        <td>₹${(m.annual_premium).toLocaleString('en-IN')}</td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="section" style="background: #f9fafb; padding: 15px; border-radius: 6px;">
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+                        <div>
+                            <div class="info-label">Total Premium for 2026-27</div>
+                            <div class="info-value" style="color: #1e40af;">₹${(data.total_premium_26_27).toLocaleString('en-IN')}</div>
+                        </div>
+                        <div>
+                            <div class="info-label">Available CTC (GMC)</div>
+                            <div class="info-value">₹${(data.ctc_gmc_26_27).toLocaleString('en-IN')}</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="section">
+                    <h3>Financial Calculation</h3>
+                    <div class="info-grid">
+                        <div class="info-item">
+                            <div class="info-label">Opening Balance (2025-26)</div>
+                            <div class="info-value">₹${(data.closing_balance_25_26).toLocaleString('en-IN')}</div>
+                        </div>
+                        <div class="info-item">
+                            <div class="info-label">Available CTC (2026-27)</div>
+                            <div class="info-value">₹${(data.ctc_gmc_26_27).toLocaleString('en-IN')}</div>
+                        </div>
+                        <div class="info-item">
+                            <div class="info-label">Total Premium Due</div>
+                            <div class="info-value">-₹${(data.total_premium_26_27).toLocaleString('en-IN')}</div>
+                        </div>
+                        <div class="info-item">
+                            <div class="info-label">Net Position</div>
+                            <div class="info-value" style="color: ${data.salary_deduction_26_27 > 0 ? '#ef4444' : '#10b981'};">
+                                ${data.salary_deduction_26_27 > 0 ? '-' : '+'}₹${Math.abs(data.salary_deduction_26_27).toLocaleString('en-IN')}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                ${data.salary_deduction_26_27 > 0 ? `
+                    <div class="alert alert-warning">
+                        <strong>💼 Salary Deduction:</strong> ₹${(data.salary_deduction_26_27).toLocaleString('en-IN')} will be deducted from your salary.
+                        <br>Monthly EMI (over 6 months): ₹${(data.emi_per_month_6mo).toLocaleString('en-IN')}
+                    </div>
+                ` : `
+                    <div class="alert alert-success">
+                        <strong>💰 Refund Expected:</strong> ₹${Math.abs(data.salary_deduction_26_27).toLocaleString('en-IN')} will be refunded.
+                        <br>September 2026: ₹${(data.refund_sep_2026).toLocaleString('en-IN')} | 
+                        September 2027: ₹${(data.refund_sep_2027_estimate).toLocaleString('en-IN')}
+                    </div>
+                `}
+            `;
+
+            document.getElementById('quoteContent').innerHTML = html;
+        } catch (error) {
+            document.getElementById('quoteContent').innerHTML = 
+                `<div class="alert alert-danger">Error calculating quote: ${error.message}</div>`;
+        }
+    }
+
+    function prepareQuoteTab() {
+        if (!currentQuote) {
+            calculateQuote();
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // PREPARE SUBMIT TAB
+    // ─────────────────────────────────────────────────────────────────────────
+    function prepareSubmitTab() {
+        if (!currentQuote || !selectedSumInsured) {
+            document.getElementById('submitContent').innerHTML = 
+                '<div class="alert alert-warning">Please go to Premium Quote tab and select Sum Insured first.</div>';
+            return;
+        }
+
+        let html = `
+            <div class="section">
+                <h3>Renewal Summary</h3>
+                <div class="info-grid">
+                    <div class="info-item">
+                        <div class="info-label">Selected Sum Insured</div>
+                        <div class="info-value">₹${(Number(selectedSumInsured)).toLocaleString('en-IN')}</div>
+                    </div>
+                    <div class="info-item">
+                        <div class="info-label">Total Premium</div>
+                        <div class="info-value">₹${(currentQuote.total_premium_26_27).toLocaleString('en-IN')}</div>
+                    </div>
+                    <div class="info-item">
+                        <div class="info-label">Members Covered</div>
+                        <div class="info-value">${currentQuote.members.length} persons</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="section">
+                <h3>Terms & Conditions Acceptance</h3>
+                <div class="terms-box">
+                    <p><strong>IMPORTANT:</strong> By clicking "Submit Enrollment", you confirm that:</p>
+                    <ol style="margin-left: 20px; margin-top: 10px;">
+                        <li>You have reviewed all family member details and they are correct.</li>
+                        <li>The Sum Insured selected is as per your requirement.</li>
+                        <li>You understand the coverage period: 24-JUL-2026 to 23-JUL-2027.</li>
+                        <li>All dependent additions meet the 30-day eligibility criteria.</li>
+                        <li>You agree to the financial calculation and EMI/refund terms.</li>
+                        <li>You authorize the company to deduct premium from salary if applicable.</li>
+                    </ol>
+                </div>
+                <div class="checkbox-wrapper">
+                    <input type="checkbox" id="termsCheckbox">
+                    <label for="termsCheckbox" style="margin: 0;">I have read and agree to all terms and conditions</label>
+                </div>
+            </div>
+
+            <div class="action-buttons" style="margin-top: 30px;">
+                <button type="button" class="btn btn-secondary" onclick="switchTab('quote')">← Back</button>
+                <button type="button" class="btn btn-primary" onclick="submitEnrollment()" id="submitBtn">
+                    ✓ Submit Enrollment
+                </button>
+            </div>
+        `;
+
+        document.getElementById('submitContent').innerHTML = html;
+    }
+
+    async function submitEnrollment() {
+        if (!document.getElementById('termsCheckbox').checked) {
+            alert('Please accept the terms and conditions before submitting.');
+            return;
+        }
+
+        if (!currentEmployee || !selectedSumInsured) {
+            alert('Missing required information. Please go back and review.');
+            return;
+        }
+
+        const btn = document.getElementById('submitBtn');
+        btn.disabled = true;
+        btn.textContent = '⏳ Submitting...';
+
+        try {
+            const res = await fetch(`${API_BASE}/renewal/submit`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    emp_id: currentEmployee.emp_id,
+                    sum_insured: Number(selectedSumInsured),
+                }),
+            });
+
+            const data = await res.json();
+
+            if (res.ok) {
+                document.getElementById('submitContent').innerHTML = `
+                    <div class="success-message">
+                        <strong>✓ Enrollment Submitted Successfully!</strong>
+                        <p style="margin-top: 10px;">
+                            Your renewal has been submitted. Enrollment ID: <strong>${data.enrollment_id}</strong>
+                        </p>
+                        <p>You will receive a confirmation email shortly.</p>
+                        <div style="margin-top: 15px; padding: 15px; background: white; border-radius: 6px;">
+                            <strong>Final Summary:</strong>
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-top: 10px;">
+                                <div>Total Premium: ₹${(data.total_premium_26_27).toLocaleString('en-IN')}</div>
+                                <div>Available CTC: ₹${(data.ctc_gmc_26_27).toLocaleString('en-IN')}</div>
+                                <div>Salary Deduction: ₹${(data.salary_deduction_26_27).toLocaleString('en-IN')}</div>
+                                <div>EMI (6 months): ₹${(data.emi_per_month_6mo).toLocaleString('en-IN')}/month</div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            } else {
+                throw new Error(data.error || 'Submission failed');
+            }
+        } catch (error) {
+            btn.disabled = false;
+            btn.textContent = '✓ Submit Enrollment';
+            alert(`Error: ${error.message}`);
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // INITIALIZATION
+    // ─────────────────────────────────────────────────────────────────────────
+    window.addEventListener('load', loadEligibility);
+</script>
+
+</body>
+</html>
