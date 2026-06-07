@@ -3673,6 +3673,10 @@ function navigateAndClose(page) {
 window.toggleSidebar    = toggleSidebar;
 window.closeSidebar     = closeSidebar;
 window.navigateAndClose = navigateAndClose;
+// Inline onclick handlers run in global scope where module-scoped `state` is not
+// visible. goHome() reads state here (module scope) so the Dashboard/Home nav works.
+function goHome() { navigateAndClose(state.role === 'employee' ? 'employee_dashboard' : 'dashboard'); }
+window.goHome = goHome;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ─── HIDDEN COLUMNS FILTER ────────────────────────────────────────────────────
@@ -5277,13 +5281,20 @@ function renderRenewalStep1() {
     <div style="background:white;border:1px solid var(--border);border-radius:14px;padding:24px">
       <h2 style="margin:0 0 12px 0">📋 GMC Renewal 2026-27 — Terms & Conditions</h2>
       <div style="background:#fef3c7;border-left:4px solid #f59e0b;padding:12px;border-radius:8px;margin-bottom:16px;font-size:13px">
-        <b>Renewal Window:</b> ${openDate} — ${closeDate}. Submission to insurer on ${formatDate(new Date(new Date(parseDate(renewalState.eligibility?.window?.close_at)).getTime() + 86400000))}.
+        <b>Renewal Window:</b> ${openDate} — ${closeDate}.
+        <div style="margin-top:8px;color:#92400e">
+          <b>Important:</b> If you do <b>not</b> submit this renewal, your last year's data will be carried
+          forward <b>as-is with no changes</b>. <b>No change requests will be accepted after the window closes.</b>
+        </div>
       </div>
       <div style="font-size:14px;line-height:1.7;color:var(--text2);max-height:340px;overflow-y:auto;
                    padding:16px;background:var(--surface2);border-radius:10px">
         <ol style="padding-left:18px">
-          <li><b>Coverage period:</b> 1 August 2026 to 31 July 2027 (subject to insurer confirmation).</li>
-          <li><b>No new dependents can be added.</b> Per policy rules, only existing dependents may continue. You may DELETE a dependent with a reason (expired / not continuing). <b>Once deleted, the dependent cannot be re-added in future renewals.</b></li>
+          <li><b>Coverage period:</b> 24 July 2026 to 23 July 2027.</li>
+          <li><b>Adding members is limited.</b> You may add a <b>newborn</b> (within 30 days of birth) or a
+            <b>newly-married spouse</b> (within 30 days of marriage). Other family members not currently
+            enrolled cannot be added. You may DELETE a dependent with a reason (expired / not continuing);
+            <b>once deleted, the dependent cannot be re-added in future renewals.</b></li>
           <li>You may correct typos in dependent <b>name, date of birth, and gender</b>. The <b>relation</b> field is locked.</li>
           <li><b>Sum Insured</b> can be increased or kept the same. <b>It cannot be decreased.</b></li>
           <li>Premium displayed is approximate and may vary <b>±10%</b> based on the insurer's final policy booking.</li>
@@ -5452,18 +5463,13 @@ function renderRenewalStep3() {
         <button class="btn btn-secondary" onclick="renewalGoStep(2)">← Back</button>
         ${(() => {
           const e = renewalState.eligibility.employee || {};
-          const canSubmit = !!e.mobile_number && !!e.email_id;
-          const tip = !canSubmit
-            ? (!e.mobile_number && !e.email_id ? 'Mobile number and email are missing'
-              : !e.mobile_number ? 'Mobile number is missing from your record'
-              : 'Email ID is missing from your record')
-              + ' — please contact HR to update before submitting.'
+          const missingContact = !e.mobile_number || !e.email_id;
+          const tip = missingContact
+            ? 'Mobile/email is missing from your record — submission still works, but please ask HR to update it.'
             : '';
           return `<button id="renewal-submit-btn" class="btn btn-primary"
             onclick="submitRenewal()"
-            ${canSubmit ? '' : 'disabled'}
-            title="${tip}"
-            style="${!canSubmit ? 'opacity:0.55;cursor:not-allowed' : ''}">
+            title="${tip}">
             ✅ Submit Renewal
           </button>`;
         })()}
@@ -5793,11 +5799,10 @@ async function submitRenewal() {
   const si    = renewalState.selectedSI;
   if (!si) return showToast('Please select Sum Insured', 'error');
 
-  // ✅ FIX: Guard — block submission if required fields missing
+  // Contact details preferred (for confirmation email) but not blocking.
   if (!emp.mobile_number || !emp.email_id) {
     const missing = [!emp.mobile_number && 'mobile number', !emp.email_id && 'email ID'].filter(Boolean).join(' and ');
-    showToast(`❌ Cannot submit: ${missing} is missing from your employee record. Please contact HR.`, 'error');
-    return;
+    showToast(`⚠️ Your ${missing} is missing — submitting anyway. Please ask HR to update it.`, 'info');
   }
 
   if (!confirm('Submit your 2026-27 GMC Renewal? You will not be able to add deleted dependents back in future cycles.')) return;

@@ -154,7 +154,7 @@
     <div class="sidebar" id="sidebar">
 
       <div class="sidebar-section-label">Overview</div>
-      <div class="sidebar-item active" data-page="dashboard" onclick="navigateAndClose(state.role==='employee'?'employee_dashboard':'dashboard')">
+      <div class="sidebar-item active" data-page="dashboard" onclick="goHome()">
         <span class="icon">🏠</span><span class="label">Dashboard</span>
       </div>
 
@@ -273,7 +273,7 @@
 
 <!-- MOBILE BOTTOM NAV (employee view) -->
 <nav class="mobile-bottom-nav" id="mobile-bottom-nav">
-  <button class="mbn-item" onclick="navigateAndClose(state.role==='employee'?'employee_dashboard':'dashboard')" data-page="dashboard">
+  <button class="mbn-item" onclick="goHome()" data-page="dashboard">
     <span class="mbn-icon">🏠</span>
     <span class="mbn-label">Home</span>
   </button>
