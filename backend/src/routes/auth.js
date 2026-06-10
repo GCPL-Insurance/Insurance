@@ -708,6 +708,13 @@ router.post('/enrollment', requireAuth, enrollmentLimiter, async (req, res) => {
           await supabase.from('employee_gmc_enrollment')
             .update({ enrollment_status: 'DRAFT', submitted_at: null })
             .eq('enrollment_id', enrollmentId);
+          // RECOVERY: store the full submitted payload in the audit table so the
+          // member data the employee entered is never lost even if the insert fails.
+          await supabase.from('employee_gmc_enrollment_audit').insert({
+            enrollment_id: enrollmentId, emp_id, action: 'SUBMIT_FAILED', action_by: emp_id,
+            remarks: ('insured insert failed: ' + membInsErr.message).slice(0, 500),
+            payload: { enrollment: enrollmentData, insured_members }, created_at: now,
+          }).catch(e => console.warn('[enrollment] failure-audit insert failed:', e.message));
           return send(400, { error: 'Failed to save insured members: ' + membInsErr.message });
         }
       } else {
@@ -730,6 +737,7 @@ router.post('/enrollment', requireAuth, enrollmentLimiter, async (req, res) => {
       enrollment_id: enrollmentId, emp_id,
       action: action === 'submit' ? 'SUBMIT' : 'DRAFT_SAVE',
       action_by: emp_id, created_at: now,
+      payload: { enrollment: enrollmentData, insured_members: insured_members || [] },
     }).catch(e => console.warn('[enrollment] audit insert failed:', e.message));
 
     // ── Fetch fresh insured_members for response ──────────────────────────────
