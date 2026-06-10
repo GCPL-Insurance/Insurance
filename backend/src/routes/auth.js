@@ -630,13 +630,18 @@ router.post('/enrollment', requireAuth, enrollmentLimiter, async (req, res) => {
     if (existing?.enrollment_status === 'SUBMITTED' && action === 'submit') {
       const { data: existingMembers } = await supabase
         .from('employee_gmc_enrollment_insured').select('*').eq('enrollment_id', existing.enrollment_id);
-      return send(200, {
-        success: true,
-        enrollment_id: existing.enrollment_id,
-        status: 'SUBMITTED',
-        insured_members: existingMembers || [],
-        _retry: true,
-      });
+      // Only treat as an already-done resubmit if members were actually saved.
+      // A SUBMITTED header with ZERO members means a previous attempt failed/partial —
+      // fall through and (re)save the members instead of masking it as success.
+      if (existingMembers && existingMembers.length > 0) {
+        return send(200, {
+          success: true,
+          enrollment_id: existing.enrollment_id,
+          status: 'SUBMITTED',
+          insured_members: existingMembers,
+          _retry: true,
+        });
+      }
     }
 
     const enrollmentStatus = action === 'submit' ? 'SUBMITTED' : 'DRAFT';
@@ -698,6 +703,11 @@ router.post('/enrollment', requireAuth, enrollmentLimiter, async (req, res) => {
           .from('employee_gmc_enrollment_insured').insert(membersToInsert);
         if (membInsErr) {
           console.error('[enrollment] insured_members insert failed:', membInsErr.message);
+          // Don't leave a SUBMITTED header with no members — revert to DRAFT so the
+          // next submit retries the member insert instead of short-circuiting.
+          await supabase.from('employee_gmc_enrollment')
+            .update({ enrollment_status: 'DRAFT', submitted_at: null })
+            .eq('enrollment_id', enrollmentId);
           return send(400, { error: 'Failed to save insured members: ' + membInsErr.message });
         }
       } else {
