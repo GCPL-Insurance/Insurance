@@ -78,7 +78,8 @@ export async function apiFetch(path, options = {}) {
   // Determine if this is a mutation (write) — these are most affected by cold-start
   const isMutation = options.method && ['POST','PATCH','PUT','DELETE'].includes(options.method.toUpperCase());
 
-  let res = await fetchWithRetry(`${API_BASE}${path}`, { ...options, headers }, isMutation ? 1 : 0);
+  // Never serve API data from the browser HTTP cache (e.g. stale renewal/admin GETs).
+  let res = await fetchWithRetry(`${API_BASE}${path}`, { ...options, headers, cache: 'no-store' }, isMutation ? 1 : 0);
 
   // Auto-refresh on 401 — but NOT for auth routes (login/logout/forgot-password)
   // Auth routes returning 401 mean wrong credentials, not expired tokens.

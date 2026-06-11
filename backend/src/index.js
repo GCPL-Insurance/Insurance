@@ -70,6 +70,18 @@ app.use(cors({
 
 app.use(express.json({ limit: '1mb' }));
 
+// ─── No-cache for ALL API responses ──────────────────────────────────────────
+// API data is per-user and changes constantly (enrollment/renewal status, admin
+// dashboards). Without this, the browser or Cloudflare can serve a stale snapshot
+// (e.g. renewal progress showing an old stage after a submit). no-store tells both
+// to never cache these responses.
+app.use((req, res, next) => {
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.set('Pragma', 'no-cache');
+  res.set('Expires', '0');
+  next();
+});
+
 // ─── Global rate limit: 300 req/15min per IP ─────────────────────────────────
 app.use(rateLimit({
   windowMs: 15 * 60 * 1000,
