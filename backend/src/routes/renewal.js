@@ -714,10 +714,19 @@ router.post('/_update-contact', async (req, res) => {
 router.get('/admin/progress', async (req, res) => {
   if (!['admin', 'hr'].includes(req.user.role)) return res.status(403).json({ error: 'Admin/HR only' });
 
-  const { data, error } = await supabase.from('vw_renewal_progress').select('*').order('emp_id');
-  if (error) return res.status(400).json({ error: error.message });
-
-  const rows = data || [];
+  // Fetch ALL eligible rows. PostgREST caps a single response (~1000 rows), so
+  // page through with .range() — otherwise employees beyond the first 1000 (often
+  // the symbol/alphanumeric emp_ids by sort order) silently drop from the counts.
+  const PAGE = 1000;
+  let rows = [];
+  for (let from = 0; from < 100000; from += PAGE) {
+    const { data, error } = await supabase
+      .from('vw_renewal_progress').select('*')
+      .order('emp_id').range(from, from + PAGE - 1);
+    if (error) return res.status(400).json({ error: error.message });
+    rows = rows.concat(data || []);
+    if (!data || data.length < PAGE) break;
+  }
   const totals = {
     total_eligible:         rows.length,
     submitted:              rows.filter(r => r.stage === 'SUBMITTED').length,
