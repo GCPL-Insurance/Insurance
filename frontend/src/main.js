@@ -5948,6 +5948,7 @@ async function renderAdminRenewalProgress() {
       <div class="stat-card blue"><div class="stat-icon">👥</div><div class="stat-label">Eligible Employees</div><div class="stat-value">${t.total_eligible || 0}</div></div>
       <div class="stat-card green"><div class="stat-icon">✅</div><div class="stat-label">Submitted</div><div class="stat-value">${t.submitted || 0}</div><div class="stat-sub">${t.progress_percent || 0}%</div></div>
       <div class="stat-card amber"><div class="stat-icon">👀</div><div class="stat-label">Visited / Not Submitted</div><div class="stat-value">${t.visited_not_submitted || 0}</div></div>
+      <div class="stat-card blue"><div class="stat-icon">🔑</div><div class="stat-label">Logged In / Not Visited</div><div class="stat-value">${t.logged_in_not_visited || 0}</div></div>
       <div class="stat-card purple"><div class="stat-icon">🚪</div><div class="stat-label">Never Logged In</div><div class="stat-value">${t.never_logged_in || 0}</div></div>
     </div>
 
