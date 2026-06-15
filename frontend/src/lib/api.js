@@ -210,7 +210,7 @@ export const views = {
     const qs = new URLSearchParams(params).toString();
     return apiFetch(`/views/${viewName}${qs ? '?' + qs : ''}`);
   },
-  employeeFull: (empId) => apiFetch(`/views/employee-full/${empId}`),
+  employeeFull: (empId) => apiFetch(`/views/employee-full/${encodeURIComponent(empId)}`),
 };
 
 // ─── Admin ────────────────────────────────────────────────────────────────────
@@ -283,8 +283,8 @@ export const renewal = {
     const qs = emp_id ? `?emp_id=${encodeURIComponent(emp_id)}` : '';
     return apiFetch(`/renewal/eligibility${qs}`);
   },
-  dependents: (empId) => apiFetch(`/renewal/dependents/${empId}`),
-  addDependent:     (empId, body)      => apiFetch(`/renewal/dependents/${empId}`,   { method: 'POST',  body: JSON.stringify(body) }),
+  dependents: (empId) => apiFetch(`/renewal/dependents/${encodeURIComponent(empId)}`),
+  addDependent:     (empId, body)      => apiFetch(`/renewal/dependents/${encodeURIComponent(empId)}`,   { method: 'POST',  body: JSON.stringify(body) }),
   editDependent:    (id, body)         => apiFetch(`/renewal/dependents/${id}`,        { method: 'PATCH', body: JSON.stringify(body) }),
   deleteDependent:  (id, reason)       => apiFetch(`/renewal/dependents/${id}/delete`, { method: 'POST',  body: JSON.stringify({ reason }) }),
   restoreDependent: (id)               => apiFetch(`/renewal/dependents/${id}/restore`,{ method: 'POST' }),
@@ -294,7 +294,7 @@ export const renewal = {
   updateContact: (body) => apiFetch('/renewal/_update-contact', { method: 'POST', body: JSON.stringify(body) }),
   admin: {
     progress: ()            => apiFetch('/renewal/admin/progress'),
-    remind:   (empId)       => apiFetch(`/renewal/admin/remind/${empId}`, { method: 'POST' }),
-    pause:    (empId, paused) => apiFetch(`/renewal/admin/pause/${empId}`, { method: 'POST', body: JSON.stringify({ paused }) }),
+    remind:   (empId)       => apiFetch(`/renewal/admin/remind/${encodeURIComponent(empId)}`, { method: 'POST' }),
+    pause:    (empId, paused) => apiFetch(`/renewal/admin/pause/${encodeURIComponent(empId)}`, { method: 'POST', body: JSON.stringify({ paused }) }),
   },
 };

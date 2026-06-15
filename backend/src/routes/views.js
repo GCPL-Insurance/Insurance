@@ -47,23 +47,24 @@ const ROLE_RANK = { employee: 0, hr: 1, admin: 2 };
 // ─── GET /api/views/employee-full/:empId ─────────────────────────────────────
 // Master employee report — MUST be defined BEFORE /:viewName
 router.get('/employee-full/:empId', async (req, res) => {
-  const { empId } = req.params;
+  const empId = (req.params.empId || '').trim();   // Express already URL-decodes path params
   const { role, emp_id } = req.user;
 
-  // Validate empId format (alphanumeric, reasonable length)
-  if (!/^[A-Z0-9][A-Z0-9\-]{0,19}$/.test(empId.toUpperCase())) {
-    return res.status(400).json({ error: 'Invalid empId format' });
+  // Basic sanity only — emp_ids can be alphanumeric and contain symbols.
+  // (All queries are parameterized, so this is not an injection surface.)
+  if (!empId || empId.length > 40) {
+    return res.status(400).json({ error: 'Invalid empId' });
   }
 
-  // Employee can only see their own data
-  if (role === 'employee' && emp_id !== empId.toUpperCase()) {
+  // Employee can only see their own data (match the canonical id exactly — no case folding)
+  if (role === 'employee' && emp_id !== empId) {
     return res.status(403).json({ error: 'Access denied' });
   }
   if (!['admin', 'hr', 'employee'].includes(role)) {
     return res.status(403).json({ error: 'Access denied' });
   }
 
-  const empIdNorm = empId.toUpperCase();
+  const empIdNorm = empId;
 
   const tables = [
     { name: 'employees',                     col: 'emp_id' },

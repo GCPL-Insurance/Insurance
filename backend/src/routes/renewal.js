@@ -165,7 +165,7 @@ async function loadOwnedMember(req, memberId) {
 // ─────────────────────────────────────────────────────────────────────────────
 router.get('/eligibility', async (req, res) => {
   const { emp_id, role } = req.user;
-  const empIdParam = (req.query.emp_id || emp_id || '').toString().toUpperCase();
+  const empIdParam = (req.query.emp_id || emp_id || '').toString().trim();
   if (!empIdParam) return res.status(400).json({ error: 'emp_id required' });
   if (!requireOwnEmpOrAdmin(req, empIdParam)) return res.status(403).json({ error: 'Access denied' });
 
@@ -254,7 +254,7 @@ router.get('/eligibility', async (req, res) => {
 // Excludes Self (Self is implicit; shown only in the premium quote).
 // ─────────────────────────────────────────────────────────────────────────────
 router.get('/dependents/:empId', async (req, res) => {
-  const empIdParam = (req.params.empId || '').toString().toUpperCase();
+  const empIdParam = (req.params.empId || '').toString().trim();
   if (!empIdParam) return res.status(400).json({ error: 'emp_id required' });
   if (!requireOwnEmpOrAdmin(req, empIdParam)) return res.status(403).json({ error: 'Access denied' });
 
@@ -350,7 +350,7 @@ router.post('/dependents/:id/restore', async (req, res) => {
 //         date_of_birth, relationship?, marriage_date? }
 // ─────────────────────────────────────────────────────────────────────────────
 router.post('/dependents/:empId', async (req, res) => {
-  const empIdParam = (req.params.empId || '').toString().toUpperCase();
+  const empIdParam = (req.params.empId || '').toString().trim();
   if (!empIdParam) return res.status(400).json({ error: 'emp_id required' });
   if (!requireOwnEmpOrAdmin(req, empIdParam)) return res.status(403).json({ error: 'Access denied' });
 
@@ -523,7 +523,7 @@ async function computeQuote(empIdParam, sumInsured) {
 // POST /api/renewal/quote   body: { emp_id, sum_insured }
 // ─────────────────────────────────────────────────────────────────────────────
 router.post('/quote', async (req, res) => {
-  const empIdParam = (req.body?.emp_id || req.user.emp_id || '').toString().toUpperCase();
+  const empIdParam = (req.body?.emp_id || req.user.emp_id || '').toString().trim();
   const sumInsured = Number(req.body?.sum_insured);
   if (!empIdParam || !sumInsured) return res.status(400).json({ error: 'emp_id and sum_insured required' });
   if (!requireOwnEmpOrAdmin(req, empIdParam)) return res.status(403).json({ error: 'Access denied' });
@@ -538,7 +538,7 @@ router.post('/quote', async (req, res) => {
 // POST /api/renewal/submit   body: { emp_id, sum_insured, terms_accepted }
 // ─────────────────────────────────────────────────────────────────────────────
 router.post('/submit', async (req, res) => {
-  const empIdParam = (req.body?.emp_id || req.user.emp_id || '').toString().toUpperCase();
+  const empIdParam = (req.body?.emp_id || req.user.emp_id || '').toString().trim();
   const sumInsured = Number(req.body?.sum_insured);
 
   if (!empIdParam) return res.status(400).json({ error: 'emp_id required' });
@@ -667,7 +667,7 @@ router.post('/submit', async (req, res) => {
 // POST /api/renewal/_track-login   — fire-and-forget login-stage tracker
 // ─────────────────────────────────────────────────────────────────────────────
 router.post('/_track-login', async (req, res) => {
-  const empIdParam = (req.user?.emp_id || '').toString().toUpperCase();
+  const empIdParam = (req.user?.emp_id || '').toString().trim();
   if (!empIdParam || req.user.role !== 'employee') return res.json({ ok: true });
   await bumpMonitor(empIdParam, { last_logged_in_at: new Date().toISOString() });
   res.json({ ok: true });
@@ -678,7 +678,7 @@ router.post('/_track-login', async (req, res) => {
 // Lets an employee fill in a missing mobile number (and email) on their own record.
 // ─────────────────────────────────────────────────────────────────────────────
 router.post('/_update-contact', async (req, res) => {
-  const empIdParam = (req.user?.emp_id || '').toString().toUpperCase();
+  const empIdParam = (req.user?.emp_id || '').toString().trim();
   if (!empIdParam) return res.status(400).json({ error: 'emp_id required' });
   if (!requireOwnEmpOrAdmin(req, empIdParam)) return res.status(403).json({ error: 'Access denied' });
 
@@ -737,7 +737,7 @@ router.get('/admin/progress', async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 router.post('/admin/remind/:empId', async (req, res) => {
   if (!['admin', 'hr'].includes(req.user.role)) return res.status(403).json({ error: 'Admin/HR only' });
-  const empIdParam = (req.params.empId || '').toString().toUpperCase();
+  const empIdParam = (req.params.empId || '').toString().trim();
 
   const { data: m } = await supabase
     .from('renewal_monitor_2026_27')
@@ -758,7 +758,7 @@ router.post('/admin/remind/:empId', async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 router.post('/admin/pause/:empId', async (req, res) => {
   if (!['admin', 'hr'].includes(req.user.role)) return res.status(403).json({ error: 'Admin/HR only' });
-  const empIdParam = (req.params.empId || '').toString().toUpperCase();
+  const empIdParam = (req.params.empId || '').toString().trim();
   const paused = req.body?.paused === true;
 
   await bumpMonitor(empIdParam, { reminder_paused: paused });
