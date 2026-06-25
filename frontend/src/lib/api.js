@@ -15,6 +15,8 @@ export const tokenStore = {
   },
   getUser:     () => { try { return JSON.parse(localStorage.getItem('ip_user')); } catch { return null; } },
   setUser:     (u) => localStorage.setItem('ip_user', JSON.stringify(u)),
+  getDevice:   () => localStorage.getItem('ip_device'),
+  setDevice:   (t) => localStorage.setItem('ip_device', t),
 };
 
 let isRefreshing = false;
@@ -78,8 +80,7 @@ export async function apiFetch(path, options = {}) {
   // Determine if this is a mutation (write) — these are most affected by cold-start
   const isMutation = options.method && ['POST','PATCH','PUT','DELETE'].includes(options.method.toUpperCase());
 
-  // Never serve API data from the browser HTTP cache (e.g. stale renewal/admin GETs).
-  let res = await fetchWithRetry(`${API_BASE}${path}`, { ...options, headers, cache: 'no-store' }, isMutation ? 1 : 0);
+  let res = await fetchWithRetry(`${API_BASE}${path}`, { ...options, headers }, isMutation ? 1 : 0);
 
   // Auto-refresh on 401 — but NOT for auth routes (login/logout/forgot-password)
   // Auth routes returning 401 mean wrong credentials, not expired tokens.
@@ -138,13 +139,26 @@ export const auth = {
   login: async (email, password, captchaToken) => {
     const data = await apiFetch('/auth/login', {
       method: 'POST',
-      body: JSON.stringify({ email, password, captchaToken }),
+      body: JSON.stringify({ email, password, captchaToken, device_token: tokenStore.getDevice() || undefined }),
+    });
+    if (data.otp_required) return { otp_required: true, pending_id: data.pending_id, email_masked: data.email_masked };
+    tokenStore.set(data.access_token);
+    tokenStore.setRefresh(data.refresh_token);
+    tokenStore.setUser(data.user);
+    return { user: data.user };
+  },
+  verifyOtp: async (pending_id, code, remember_device) => {
+    const data = await apiFetch('/auth/verify-otp', {
+      method: 'POST',
+      body: JSON.stringify({ pending_id, code, remember_device }),
     });
     tokenStore.set(data.access_token);
     tokenStore.setRefresh(data.refresh_token);
     tokenStore.setUser(data.user);
+    if (data.device_token) tokenStore.setDevice(data.device_token);
     return data.user;
   },
+  resendOtp: (pending_id) => apiFetch('/auth/resend-otp', { method: 'POST', body: JSON.stringify({ pending_id }) }),
   logout: async () => {
     await apiFetch('/auth/logout', { method: 'POST' }).catch(() => {});
     tokenStore.clear();
@@ -210,7 +224,7 @@ export const views = {
     const qs = new URLSearchParams(params).toString();
     return apiFetch(`/views/${viewName}${qs ? '?' + qs : ''}`);
   },
-  employeeFull: (empId) => apiFetch(`/views/employee-full/${encodeURIComponent(empId)}`),
+  employeeFull: (empId) => apiFetch(`/views/employee-full/${empId}`),
 };
 
 // ─── Admin ────────────────────────────────────────────────────────────────────
@@ -283,8 +297,8 @@ export const renewal = {
     const qs = emp_id ? `?emp_id=${encodeURIComponent(emp_id)}` : '';
     return apiFetch(`/renewal/eligibility${qs}`);
   },
-  dependents: (empId) => apiFetch(`/renewal/dependents/${encodeURIComponent(empId)}`),
-  addDependent:     (empId, body)      => apiFetch(`/renewal/dependents/${encodeURIComponent(empId)}`,   { method: 'POST',  body: JSON.stringify(body) }),
+  dependents: (empId) => apiFetch(`/renewal/dependents/${empId}`),
+  addDependent:     (empId, body)      => apiFetch(`/renewal/dependents/${empId}`,   { method: 'POST',  body: JSON.stringify(body) }),
   editDependent:    (id, body)         => apiFetch(`/renewal/dependents/${id}`,        { method: 'PATCH', body: JSON.stringify(body) }),
   deleteDependent:  (id, reason)       => apiFetch(`/renewal/dependents/${id}/delete`, { method: 'POST',  body: JSON.stringify({ reason }) }),
   restoreDependent: (id)               => apiFetch(`/renewal/dependents/${id}/restore`,{ method: 'POST' }),
@@ -294,7 +308,7 @@ export const renewal = {
   updateContact: (body) => apiFetch('/renewal/_update-contact', { method: 'POST', body: JSON.stringify(body) }),
   admin: {
     progress: ()            => apiFetch('/renewal/admin/progress'),
-    remind:   (empId)       => apiFetch(`/renewal/admin/remind/${encodeURIComponent(empId)}`, { method: 'POST' }),
-    pause:    (empId, paused) => apiFetch(`/renewal/admin/pause/${encodeURIComponent(empId)}`, { method: 'POST', body: JSON.stringify({ paused }) }),
+    remind:   (empId)       => apiFetch(`/renewal/admin/remind/${empId}`, { method: 'POST' }),
+    pause:    (empId, paused) => apiFetch(`/renewal/admin/pause/${empId}`, { method: 'POST', body: JSON.stringify({ paused }) }),
   },
 };

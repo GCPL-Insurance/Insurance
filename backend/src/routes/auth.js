@@ -2,8 +2,36 @@ import { Router } from 'express';
 import { supabase } from '../index.js';
 import { requireAuth } from '../index.js';
 import { authLimiter, enrollmentLimiter } from '../limiters.js';
+import crypto from 'node:crypto';
 
 const router = Router();
+
+// ─── Email OTP (2FA) + trusted devices ─────────────────────────────────────────
+const OTP_ENABLED = (process.env.OTP_ENABLED || 'false').toLowerCase() === 'true';
+const OTP_PEPPER  = process.env.OTP_PEPPER || (process.env.RENEWAL_FN_SECRET || 'change-me');
+const OTP_TTL_MIN = 5;
+const OTP_MAX_ATTEMPTS = 5;
+const OTP_RESEND_COOLDOWN_MS = 60 * 1000;
+const OTP_MAX_RESENDS = 3;
+const DEVICE_TRUST_DAYS = 30;
+const FN_BASE   = `${process.env.SUPABASE_URL || ''}/functions/v1`;
+const FN_SECRET = process.env.RENEWAL_FN_SECRET || '';
+
+const _otpHash   = (code) => crypto.createHmac('sha256', OTP_PEPPER).update(String(code)).digest('hex');
+const _tokenHash = (t)    => crypto.createHash('sha256').update(String(t)).digest('hex');
+const _genOtp    = ()     => String(crypto.randomInt(0, 1000000)).padStart(6, '0');
+const _genDevice = ()     => crypto.randomBytes(32).toString('hex');
+const _maskEmail = (e) => { const [u, d] = String(e).split('@'); return (u ? u[0] + '***' : '') + '@' + (d || ''); };
+
+async function _sendOtpEmail(to, fullName, code) {
+  try {
+    await fetch(`${FN_BASE}/send-otp`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY || ''}` },
+      body: JSON.stringify({ secret: FN_SECRET, to, full_name: fullName, code, ttl_minutes: OTP_TTL_MIN }),
+    });
+  } catch (e) { console.error('[otp] send failed:', e?.message || e); }
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -454,6 +482,42 @@ router.post('/login', authLimiter, async (req, res) => {
   if (!profile.is_active) {
     await supabase.auth.admin.signOut(data.session.access_token).catch(() => {});
     return res.status(403).json({ error: 'Your account has been deactivated. Contact HR.' });
+  }
+
+  // ── 2FA: trusted device skips OTP; otherwise email a one-time code ──
+  if (OTP_ENABLED) {
+    const deviceToken = (req.body.device_token || '').toString().trim();
+    let trusted = false;
+    if (deviceToken) {
+      const { data: dev } = await supabase.from('trusted_device')
+        .select('id').eq('user_id', data.user.id).eq('token_hash', _tokenHash(deviceToken))
+        .gt('expires_at', new Date().toISOString()).maybeSingle();
+      if (dev) {
+        trusted = true;
+        supabase.from('trusted_device').update({ last_used_at: new Date().toISOString() }).eq('id', dev.id).then(() => {});
+      }
+    }
+    if (!trusted) {
+      const code = _genOtp();
+      const pendingSession = {
+        access_token: data.session.access_token,
+        refresh_token: data.session.refresh_token,
+        expires_at: data.session.expires_at,
+        user: {
+          id: data.user.id, email: data.user.email,
+          role: profile.role || 'employee', emp_id: profile.emp_id, full_name: profile.full_name,
+          must_change_password: profile.must_change_password ?? false,
+        },
+      };
+      const { data: pend, error: pErr } = await supabase.from('login_otp_pending').insert({
+        user_id: data.user.id, emp_id: profile.emp_id, email: emailNorm,
+        otp_hash: _otpHash(code), session: pendingSession,
+        expires_at: new Date(Date.now() + OTP_TTL_MIN * 60 * 1000).toISOString(),
+      }).select('id').single();
+      if (pErr) { console.error('[otp] pending insert failed:', pErr.message); return res.status(500).json({ error: 'Could not start verification. Please try again.' }); }
+      await _sendOtpEmail(emailNorm, profile.full_name, code);
+      return res.json({ otp_required: true, pending_id: pend.id, email_masked: _maskEmail(emailNorm) });
+    }
   }
 
   res.json({
@@ -952,6 +1016,58 @@ router.post('/change-password', requireAuth, async (req, res) => {
 
   console.log('[change-password] emp_id', emp_id, 'changed password successfully');
   res.json({ success: true, message: 'Password changed successfully.' });
+});
+
+// ─── OTP verify / resend ────────────────────────────────────────────────────────
+router.post('/verify-otp', authLimiter, async (req, res) => {
+  const { pending_id, code, remember_device } = req.body || {};
+  if (!pending_id || !code) return res.status(400).json({ error: 'Code is required.' });
+
+  const { data: pend } = await supabase.from('login_otp_pending').select('*').eq('id', pending_id).single();
+  if (!pend) return res.status(400).json({ error: 'Verification expired. Please log in again.' });
+  if (new Date(pend.expires_at) < new Date()) {
+    await supabase.from('login_otp_pending').delete().eq('id', pending_id);
+    return res.status(400).json({ error: 'Code expired. Please log in again.' });
+  }
+  if (pend.attempts >= OTP_MAX_ATTEMPTS) {
+    await supabase.from('login_otp_pending').delete().eq('id', pending_id);
+    return res.status(429).json({ error: 'Too many incorrect attempts. Please log in again.' });
+  }
+  if (_otpHash(String(code).trim()) !== pend.otp_hash) {
+    await supabase.from('login_otp_pending').update({ attempts: pend.attempts + 1 }).eq('id', pending_id);
+    const left = Math.max(0, OTP_MAX_ATTEMPTS - (pend.attempts + 1));
+    return res.status(401).json({ error: `Incorrect code. ${left} attempt(s) left.` });
+  }
+
+  await supabase.from('login_otp_pending').delete().eq('id', pending_id);
+  let device_token = null;
+  if (remember_device) {
+    device_token = _genDevice();
+    await supabase.from('trusted_device').insert({
+      user_id: pend.user_id, emp_id: pend.emp_id, token_hash: _tokenHash(device_token),
+      user_agent: (req.headers['user-agent'] || '').toString().slice(0, 300),
+      expires_at: new Date(Date.now() + DEVICE_TRUST_DAYS * 86400 * 1000).toISOString(),
+    });
+  }
+  return res.json({ ...(pend.session || {}), device_token });
+});
+
+router.post('/resend-otp', authLimiter, async (req, res) => {
+  const { pending_id } = req.body || {};
+  if (!pending_id) return res.status(400).json({ error: 'Session expired. Please log in again.' });
+  const { data: pend } = await supabase.from('login_otp_pending').select('*').eq('id', pending_id).single();
+  if (!pend) return res.status(400).json({ error: 'Session expired. Please log in again.' });
+  if (new Date(pend.expires_at) < new Date()) return res.status(400).json({ error: 'Session expired. Please log in again.' });
+  if (pend.resend_count >= OTP_MAX_RESENDS) return res.status(429).json({ error: 'Resend limit reached. Please log in again.' });
+  if (Date.now() - new Date(pend.last_sent_at).getTime() < OTP_RESEND_COOLDOWN_MS)
+    return res.status(429).json({ error: 'Please wait a minute before requesting another code.' });
+  const code = _genOtp();
+  await supabase.from('login_otp_pending').update({
+    otp_hash: _otpHash(code), last_sent_at: new Date().toISOString(),
+    resend_count: pend.resend_count + 1, attempts: 0,
+  }).eq('id', pending_id);
+  await _sendOtpEmail(pend.email, null, code);
+  return res.json({ ok: true, email_masked: _maskEmail(pend.email) });
 });
 
 export default router;
