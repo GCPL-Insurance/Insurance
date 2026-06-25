@@ -274,7 +274,14 @@ async function doLogin() {
 
   try {
     // 🔒 Single unified login — role is auto-detected from user_profiles in DB.
-    const user = await auth.login(email, pwd, captchaToken);
+    const _r = await auth.login(email, pwd, captchaToken);
+    // 2FA: backend requests an email OTP when this device isn't trusted yet
+    if (_r.otp_required) {
+      btn.disabled = false; btn.textContent = 'Sign In';
+      showOtpPanel(_r.pending_id, _r.email_masked);
+      return;
+    }
+    const user = _r.user;
 
     state.user     = user;
     state.role     = user.role || 'employee';
@@ -300,6 +307,75 @@ async function doLogin() {
     resetTurnstile('login');
     btn.disabled = false; btn.textContent = 'Sign In';
   }
+}
+
+// ─── OTP (2FA) ────────────────────────────────────────────────────────────────
+let _otpPendingId = null;
+let _otpResendTimer = null;
+
+function completeLogin(user) {
+  state.user     = user;
+  state.role     = user.role || 'employee';
+  state.empId    = user.emp_id  || '';
+  state.userName = user.full_name || (document.getElementById('login-email')?.value?.trim() || '');
+  if (user.must_change_password) { showForceChangePanel(); return; }
+  if (state.role === 'employee' && state.empId) { renewal.trackLogin().catch(() => null); }
+  initApp();
+}
+
+function showOtpPanel(pendingId, emailMasked) {
+  _otpPendingId = pendingId;
+  document.getElementById('login-panel').style.display = 'none';
+  document.getElementById('forgot-panel').style.display = 'none';
+  document.getElementById('force-change-panel').style.display = 'none';
+  const panel = document.getElementById('otp-panel'); if (panel) panel.style.display = '';
+  const sub = document.getElementById('otp-sub-email'); if (sub) sub.textContent = emailMasked || 'your registered email';
+  const codeEl = document.getElementById('otp-code'); if (codeEl) { codeEl.value = ''; setTimeout(() => codeEl.focus(), 50); }
+  const errEl = document.getElementById('otp-error'); if (errEl) errEl.style.display = 'none';
+  const remember = document.getElementById('otp-remember'); if (remember) remember.checked = true;
+  _startOtpResendCooldown(60);
+}
+
+function _startOtpResendCooldown(seconds) {
+  const link = document.getElementById('otp-resend-btn');
+  const status = document.getElementById('otp-resend-status');
+  if (!link) return;
+  let left = seconds;
+  link.style.display = 'none';
+  if (status) { status.style.display = ''; status.textContent = `You can resend in ${left}s`; }
+  clearInterval(_otpResendTimer);
+  _otpResendTimer = setInterval(() => {
+    left -= 1;
+    if (left <= 0) { clearInterval(_otpResendTimer); if (status) status.style.display = 'none'; link.style.display = ''; }
+    else if (status) { status.textContent = `You can resend in ${left}s`; }
+  }, 1000);
+}
+
+async function doVerifyOtp() {
+  const code = (document.getElementById('otp-code')?.value || '').trim();
+  const remember = !!document.getElementById('otp-remember')?.checked;
+  const btn = document.getElementById('otp-btn');
+  const errEl = document.getElementById('otp-error');
+  errEl.style.display = 'none';
+  if (!/^\d{6}$/.test(code)) { errEl.textContent = 'Enter the 6-digit code from your email.'; errEl.style.display = 'block'; return; }
+  btn.disabled = true; btn.textContent = 'Verifying…';
+  try {
+    const user = await auth.verifyOtp(_otpPendingId, code, remember);
+    clearInterval(_otpResendTimer);
+    btn.disabled = false; btn.textContent = 'Verify & Continue →';
+    completeLogin(user);
+  } catch (e) {
+    errEl.textContent = e.message || 'Incorrect or expired code. Please try again.';
+    errEl.style.display = 'block';
+    btn.disabled = false; btn.textContent = 'Verify & Continue →';
+  }
+}
+
+async function doResendOtp() {
+  const errEl = document.getElementById('otp-error');
+  errEl.style.display = 'none';
+  try { await auth.resendOtp(_otpPendingId); _startOtpResendCooldown(60); }
+  catch (e) { errEl.textContent = e.message || 'Could not resend the code. Please try again.'; errEl.style.display = 'block'; }
 }
 
 async function doLogout() {
@@ -3488,12 +3564,14 @@ function showLoginPanel() {
   document.getElementById('login-panel').style.display = '';
   document.getElementById('forgot-panel').style.display = 'none';
   document.getElementById('force-change-panel').style.display = 'none';
+  const _o = document.getElementById('otp-panel'); if (_o) _o.style.display = 'none';
 }
 
 function showForgotPanel() {
   document.getElementById('login-panel').style.display = 'none';
   document.getElementById('forgot-panel').style.display = '';
   document.getElementById('force-change-panel').style.display = 'none';
+  const _o = document.getElementById('otp-panel'); if (_o) _o.style.display = 'none';
   document.getElementById('forgot-error').style.display = 'none';
   document.getElementById('forgot-success').style.display = 'none';
   const emailEl = document.getElementById('login-email');
@@ -3504,6 +3582,7 @@ function showForceChangePanel() {
   document.getElementById('login-panel').style.display = 'none';
   document.getElementById('forgot-panel').style.display = 'none';
   document.getElementById('force-change-panel').style.display = '';
+  const _o = document.getElementById('otp-panel'); if (_o) _o.style.display = 'none';
 }
 
 // ─── FORGOT PASSWORD ──────────────────────────────────────────────────────────
@@ -3635,6 +3714,9 @@ window.showLoginPanel          = showLoginPanel;
 window.showForgotPanel         = showForgotPanel;
 window.doForgotPassword        = doForgotPassword;
 window.doForceChangePassword   = doForceChangePassword;
+window.doVerifyOtp             = doVerifyOtp;
+window.doResendOtp             = doResendOtp;
+window.showOtpPanel            = showOtpPanel;
 window.showChangePasswordModal = showChangePasswordModal;
 window.hideChangePasswordModal = hideChangePasswordModal;
 window.doChangePassword        = doChangePassword;
