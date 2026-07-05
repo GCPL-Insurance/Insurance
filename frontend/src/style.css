@@ -398,20 +398,8 @@ body { background: var(--bg); color: var(--text); font-family: 'DM Sans', sans-s
 .mbn-label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
 
 @media (max-width: 768px) {
-  .mobile-bottom-nav { 
-    display: flex; 
-    padding-bottom: env(safe-area-inset-bottom, 0);
-    height: 70px;
-  }
-  .mbn-item {
-    padding: 8px 4px;
-  }
-  .mbn-label {
-    font-size: 11px;
-  }
-  .content { 
-    padding-bottom: calc(70px + env(safe-area-inset-bottom, 16px)) !important;
-  }
+  .mobile-bottom-nav { display: flex; }
+  .content { padding-bottom: max(80px, env(safe-area-inset-bottom, 80px)) !important; }
   /* Enrollment form responsive */
   .section-card [style*="grid-template-columns:1fr 1fr 1fr"] {
     grid-template-columns: 1fr !important;

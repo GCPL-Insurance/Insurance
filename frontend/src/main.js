@@ -480,8 +480,6 @@ async function doSetPassword() {
     state.userName = user.full_name || user.email;
     document.getElementById('set-password-page').style.display = 'none';
     initApp();
-    // Navigate to home dashboard after password set
-    setTimeout(() => goHome(), 100);
   } catch (e) {
     errEl.textContent = e.message || 'Failed to set password. Please try again.';
     errEl.style.display = 'block';
@@ -4016,25 +4014,6 @@ async function renderEmployeeDashboardV2() {
     new Date(b.submitted_at || b.updated_at || 0) - new Date(a.submitted_at || a.updated_at || 0)
   )[0];
 
-  // ── Load current CTC GMC from view (includes latest increments) ───────────
-  let currentCtcGmc = emp.ctc_gmc_per_month || 0;
-  try {
-    const ctcViewResult = await supabase
-      .from('current_ctc_gmc_per_month')
-      .select('ctc_gmc_per_month')
-      .eq('emp_id', empId)
-      .single();
-    if (ctcViewResult.data?.ctc_gmc_per_month) {
-      currentCtcGmc = ctcViewResult.data.ctc_gmc_per_month;
-    }
-  } catch(e) {
-    console.log('Using base CTC GMC, view error:', e.message);
-  }
-
-  // Detect if renewal is pending
-  const renewalPending = !latestRenewal || latestRenewal?.enrollment_status !== 'SUBMITTED';
-
-
   const fmtCurr = (v) => (v != null && v !== '' && !isNaN(Number(v))) ? '₹' + Number(v).toLocaleString('en-IN') : '—';
 
   // ── Determine the ACTIVE sum insured (single source of truth) ──────────────
@@ -4170,7 +4149,7 @@ async function renderEmployeeDashboardV2() {
         <div class="detail-item"><span class="detail-key">Unit</span><span class="detail-val">${emp.unit||'—'}</span></div>
         <div class="detail-item"><span class="detail-key">Date of Joining</span><span class="detail-val">${fmtDate(emp.date_of_joining)}</span></div>
         <div class="detail-item"><span class="detail-key">GMC Inclusion</span><span class="detail-val">${fmtDate(emp.gmc_inclusion_date)}</span></div>
-        <div class="detail-item"><span class="detail-key">CTC GMC/Month</span><span class="detail-val">${fmtCurr(currentCtcGmc)}</span></div>
+        <div class="detail-item"><span class="detail-key">CTC GMC/Month</span><span class="detail-val">${fmtCurr(emp.ctc_gmc_per_month)}</span></div>
       </div>
       <div class="detail-card">
         <div class="detail-card-title">💰 GMC Financials 2025-26</div>
@@ -4201,31 +4180,15 @@ async function renderEmployeeDashboardV2() {
       isNewJoinee  // ✅ KEY RULE: Only show if NOT existing employee
     )}
 
-    ${renewalPending ? `
-    <div style="background:white;border:2px solid #f97316;border-radius:14px;padding:18px;margin-bottom:16px">
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px;gap:12px">
-        <div style="display:flex;align-items:flex-start;gap:12px;flex:1">
-          <span style="font-size:28px;animation:blink 1.5s infinite;flex-shrink:0">✨</span>
-          <div>
-            <div style="font-weight:700;font-size:16px;color:#dc2626">Renewal Pending</div>
-            <div style="font-size:13px;color:var(--text3);margin-top:2px">Action required to complete your GMC renewal for 2026-27</div>
-          </div>
-        </div>
-      </div>
-      <button onclick="navigate('gmc_renewal'); closeSidebar();" style="width:100%;padding:12px 16px;background:#2563eb;color:white;border:none;border-radius:8px;cursor:pointer;font-size:14px;font-weight:600;display:flex;align-items:center;justify-content:center;gap:8px;transition:background 0.2s">
-        ⭐ Go to Renewal Portal
-      </button>
-    </div>
-    ` : ''} 
-    ${!renewalPending ? renderSection(
+    ${renderSection(
       '2026-27 Renewal', '🔄',
       latestRenewal?.enrollment_status || 'PENDING',
       renewalInsured.filter(m => !latestRenewal || m.enrollment_id === latestRenewal.enrollment_id),
       latestRenewal
         ? `Renewal submitted on ${fmtDate(latestRenewal.submitted_at)}.`
-        : 'Renewal not yet submitted.',
-      true
-    ) : ''}
+        : 'Renewal not yet submitted. Use "GMC Renewal 2026-27" in the sidebar.',
+      true  // Renewal section always shown
+    )}
 
     <!-- Claims -->
     <div style="font-size:15px;font-weight:700;margin:24px 0 12px;color:#0f172a">🏥 GMC Claims</div>
@@ -4251,22 +4214,7 @@ async function renderEmployeeDashboardV2() {
   `;
 }
 
-  // Update sidebar indicator
-  updateRenewalIndicator(renewalPending);
-
 // Override the original renderEmployeeDashboard
-
-
-// Update renewal pending indicator in sidebar
-function updateRenewalIndicator(renewalPending) {
-  const indicator = document.getElementById('renewal-pending-indicator');
-  if (indicator) {
-    indicator.style.display = renewalPending ? 'block' : 'none';
-  }
-}
-
-window.updateRenewalIndicator = updateRenewalIndicator;
-
 window.renderEmployeeDashboard = renderEmployeeDashboardV2;
 
 // ─── CTC GMC Edit Modal (employee self-service) ────────────────────────────────
@@ -5152,32 +5100,7 @@ window.renderPageV2 = renderPageV2;
 // Previously only hid elements; if a user changed roles between sessions the
 // old visibility state leaked through. Now we reset ALL elements to visible
 // first, then hide what this role should not see.
-function addBlinkingStyles() {
-  const style = document.createElement('style');
-  style.textContent = `@keyframes blink {
-  0%, 49%, 100% { opacity: 1; }
-  50%, 99% { opacity: 0.3; }
-}
-
-.blinking {
-  animation: blink 1.5s infinite;
-}
-
-.renewal-pending-badge {
-  display: inline-block;
-  width: 8px;
-  height: 8px;
-  background-color: #ef4444;
-  border-radius: 50%;
-  margin-left: 4px;
-  animation: blink 1.5s infinite;
-}`;
-  document.head.appendChild(style);
-}
-
 function initApp() {
-  addBlinkingStyles();
-
   document.getElementById('login-page').style.display = 'none';
   document.getElementById('app').classList.add('visible');
 
