@@ -480,6 +480,8 @@ async function doSetPassword() {
     state.userName = user.full_name || user.email;
     document.getElementById('set-password-page').style.display = 'none';
     initApp();
+    // Navigate to home dashboard after password set
+    setTimeout(() => goHome(), 100);
   } catch (e) {
     errEl.textContent = e.message || 'Failed to set password. Please try again.';
     errEl.style.display = 'block';
@@ -4199,15 +4201,31 @@ async function renderEmployeeDashboardV2() {
       isNewJoinee  // ✅ KEY RULE: Only show if NOT existing employee
     )}
 
-    ${renderSection(
-      '2026-27 Renewal' + (renewalPending ? ' <span class="renewal-pending-badge"></span>' : ''), '🔄',
+    ${renewalPending ? `
+    <div style="background:white;border:2px solid #f97316;border-radius:14px;padding:18px;margin-bottom:16px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px;gap:12px">
+        <div style="display:flex;align-items:flex-start;gap:12px;flex:1">
+          <span style="font-size:28px;animation:blink 1.5s infinite;flex-shrink:0">✨</span>
+          <div>
+            <div style="font-weight:700;font-size:16px;color:#dc2626">Renewal Pending</div>
+            <div style="font-size:13px;color:var(--text3);margin-top:2px">Action required to complete your GMC renewal for 2026-27</div>
+          </div>
+        </div>
+      </div>
+      <button onclick="navigate('gmc_renewal'); closeSidebar();" style="width:100%;padding:12px 16px;background:#2563eb;color:white;border:none;border-radius:8px;cursor:pointer;font-size:14px;font-weight:600;display:flex;align-items:center;justify-content:center;gap:8px;transition:background 0.2s">
+        ⭐ Go to Renewal Portal
+      </button>
+    </div>
+    ` : ''} 
+    ${!renewalPending ? renderSection(
+      '2026-27 Renewal', '🔄',
       latestRenewal?.enrollment_status || 'PENDING',
       renewalInsured.filter(m => !latestRenewal || m.enrollment_id === latestRenewal.enrollment_id),
       latestRenewal
         ? `Renewal submitted on ${fmtDate(latestRenewal.submitted_at)}.`
-        : `<span style="color:#dc2626;font-weight:600">⚠️ Renewal Pending</span><br><button onclick="navigate('gmc_renewal'); closeSidebar();" style="margin-top:8px;padding:8px 12px;background:#2563eb;color:white;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600">→ Go to Renewal</button>`,
-      true  // Renewal section always shown
-    )}
+        : 'Renewal not yet submitted.',
+      true
+    ) : ''}
 
     <!-- Claims -->
     <div style="font-size:15px;font-weight:700;margin:24px 0 12px;color:#0f172a">🏥 GMC Claims</div>
