@@ -3993,6 +3993,13 @@ async function renderEmployeeDashboardV2() {
   const claims       = data.employee_gmc_claims || [];
   const balance      = data.vw_employee_net_balance_2025_26?.[0] || {};
 
+  // CTC GMC/month for display: prefer vw_renewal_ctc_gmc (increment-aware),
+  // fall back to employees.ctc_gmc_per_month.
+  const ctcGmcRow     = data.vw_renewal_ctc_gmc?.[0] || {};
+  const ctcGmcMonthly = (ctcGmcRow.ctc_gmc_per_month != null && ctcGmcRow.ctc_gmc_per_month !== '')
+    ? ctcGmcRow.ctc_gmc_per_month
+    : emp.ctc_gmc_per_month;
+
   // Determine employee type
   const isExistingEmployee = insDeps.length > 0;   // has 25-26 insurance data
   const isNewJoinee        = !isExistingEmployee;   // relies on GMC enrollment
@@ -4149,7 +4156,7 @@ async function renderEmployeeDashboardV2() {
         <div class="detail-item"><span class="detail-key">Unit</span><span class="detail-val">${emp.unit||'—'}</span></div>
         <div class="detail-item"><span class="detail-key">Date of Joining</span><span class="detail-val">${fmtDate(emp.date_of_joining)}</span></div>
         <div class="detail-item"><span class="detail-key">GMC Inclusion</span><span class="detail-val">${fmtDate(emp.gmc_inclusion_date)}</span></div>
-        <div class="detail-item"><span class="detail-key">CTC GMC/Month</span><span class="detail-val">${fmtCurr(emp.ctc_gmc_per_month)}</span></div>
+        <div class="detail-item"><span class="detail-key">CTC GMC/Month</span><span class="detail-val">${fmtCurr(ctcGmcMonthly)}</span></div>
       </div>
       <div class="detail-card">
         <div class="detail-card-title">💰 GMC Financials 2025-26</div>
@@ -5102,7 +5109,14 @@ window.renderPageV2 = renderPageV2;
 // first, then hide what this role should not see.
 function initApp() {
   document.getElementById('login-page').style.display = 'none';
-  document.getElementById('app').classList.add('visible');
+  // BUGFIX: showSetPasswordPage() sets an inline display:none on #app which
+  // overrides the .visible class → blank page after forgot-password reset.
+  // Clear the inline style and hide the set-password page before showing app.
+  const appEl = document.getElementById('app');
+  appEl.style.display = '';
+  appEl.classList.add('visible');
+  const setPwdPage = document.getElementById('set-password-page');
+  if (setPwdPage) setPwdPage.style.display = 'none';
 
   const role = state.role || 'employee';
 

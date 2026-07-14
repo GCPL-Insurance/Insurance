@@ -98,6 +98,7 @@ router.get('/employee-full/:empId', async (req, res) => {
     'vw_ff_insurance_days', 'vw_gpa_addition', 'vw_gpa_deletion',
     'vw_total_premium_exit_employee', 'vw_ctc_gmc_slab_timeline',
     'vw_employee_net_balance_2025_26',  // ✅ ADDED: consolidated 25-26 financial data
+    'vw_renewal_ctc_gmc',               // ✅ ADDED: increment-aware CTC GMC/month for display
   ];
 
   // Run all in parallel; isolate errors per source so one failure doesn't kill the whole response

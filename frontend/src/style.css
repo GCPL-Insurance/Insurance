@@ -424,3 +424,25 @@ body { background: var(--bg); color: var(--text); font-family: 'DM Sans', sans-s
     grid-template-columns: 1fr 1fr !important;
   }
 }
+
+/* ─── Renewal nav: big blinking/shining star ──────────────────────────────── */
+.renewal-star {
+  margin-left: auto;
+  font-size: 20px;
+  line-height: 1;
+  display: inline-block;
+  animation: renewalStarShine 1.1s ease-in-out infinite;
+  filter: drop-shadow(0 0 4px #facc15);
+  pointer-events: none;
+}
+.renewal-star-mbn {           /* mobile bottom-nav: float star at top-right */
+  position: absolute;
+  top: 2px;
+  right: 8px;
+  font-size: 16px;
+  margin-left: 0;
+}
+@keyframes renewalStarShine {
+  0%, 100% { opacity: 1;   transform: scale(1);    filter: drop-shadow(0 0 4px #facc15); }
+  50%      { opacity: 0.45; transform: scale(1.45); filter: drop-shadow(0 0 14px #f59e0b) drop-shadow(0 0 6px #fde047); }
+}

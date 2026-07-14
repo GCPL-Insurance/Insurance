@@ -175,6 +175,19 @@ router.get('/eligibility', async (req, res) => {
     .eq('emp_id', empIdParam).single();
   if (empErr || !emp) return res.status(404).json({ error: 'Employee not found' });
 
+  // Display-only override: CTC GMC/month from vw_renewal_ctc_gmc (latest
+  // increment aware). Falls back to employees.ctc_gmc_per_month if view
+  // row/column is missing. Does NOT affect any premium/balance calculations.
+  try {
+    const { data: ctcView } = await supabase
+      .from('vw_renewal_ctc_gmc')
+      .select('ctc_gmc_per_month')
+      .eq('emp_id', empIdParam).maybeSingle();
+    if (ctcView?.ctc_gmc_per_month != null && ctcView.ctc_gmc_per_month !== '') {
+      emp.ctc_gmc_per_month = Number(ctcView.ctc_gmc_per_month);
+    }
+  } catch (_) { /* keep employees.ctc_gmc_per_month fallback */ }
+
   const eligible = emp.is_active !== false && !!emp.gmc_inclusion_date;
 
   // EXISTING vs NEW JOINEE

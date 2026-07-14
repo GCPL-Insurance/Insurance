@@ -337,13 +337,12 @@ router.get('/enrollment-data', authMiddleware, async (req, res) => {
           .from('employee_gmc_enrollment_insured')
           .select('*')
           .eq('emp_id', emp_id),
-        // 4. insurer rate cards for premium calculation
+        // 4. GMC premium rate card 26-27 (single rate card — no insurer/company split)
         supabase
-          .from('gmc_rate_cards')
-          .select('rate_card_id, rate_card_type, age_band_from, age_band_to, sum_insured, annual_premium')
-          .eq('rate_card_type', 'INSURER')
+          .from('gmc_premium_rates_26_27')
+          .select('id, sum_insured, age_min, age_max, annual_premium')
           .order('sum_insured')
-          .order('age_band_from'),
+          .order('age_min'),
         // 5. pre-calculated CTC GMC total from view (employees-based, most accurate)
         supabase
           .from('vw_employee_ctc_gmc_total')
@@ -507,10 +506,21 @@ router.post('/enrollment', authMiddleware, async (req, res) => {
 
         const days = Math.max(1, Math.floor((POLICY_END - new Date(doj || Date.now())) / 86400000) + 1);
 
-        const annualPremium = (rel, age) => {
-          const mult = sumInsured / 300000;
-          const base = rel === 'Self' ? 2500 : rel === 'Spouse' ? 2200 : rel === 'Child' ? 1200 : 2800;
-          return Math.round((base + (age > 45 ? (age - 45) * 60 : 0)) * mult);
+        // Premium comes from the 26-27 rate card (age-banded, per sum insured).
+        // Single rate card — no insurer/company split, no hardcoded formula.
+        const { data: rateRows } = await supabase
+          .from('gmc_premium_rates_26_27')
+          .select('sum_insured, age_min, age_max, annual_premium')
+          .eq('sum_insured', sumInsured);
+
+        if (!rateRows || rateRows.length === 0) {
+          return res.status(400).json({ error: `Premium rates not configured for sum insured ${sumInsured}` });
+        }
+
+        // Age-band lookup; relationship does not affect premium in this rate card.
+        const annualPremium = (_rel, age) => {
+          const r = rateRows.find(x => age >= x.age_min && age <= x.age_max);
+          return r ? Number(r.annual_premium) : 0;
         };
 
         let dependents = [];
