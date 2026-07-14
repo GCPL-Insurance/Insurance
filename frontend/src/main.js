@@ -79,8 +79,8 @@ const TABLES = {
     insertable: true,
   },
   t_gmc_rate_cards: {
-    name: 'gmc_rate_cards', label: 'GMC Rate Cards', key: 'rate_card_id',
-    columns: ['rate_card_id','rate_card_type','age_band_from','age_band_to','sum_insured','annual_premium'],
+    name: 'gmc_premium_rates_26_27', label: 'GMC Premium Rates 26-27', key: 'id',
+    columns: ['id','sum_insured','age_min','age_max','annual_premium','notes'],
     insertable: true,
   },
   t_opening_balance: {
@@ -2247,10 +2247,11 @@ function ctcGmcAvailable(ctcGmcPerMonth, unit, emp) {
 }
 
 function getInsurerPremium(rateCards, si, age) {
-  // Find INSURER rate card matching sum_insured and age band
+  // Single 26-27 rate card: matched on sum_insured + age band (age_min..age_max).
+  // No rate_card_type — one rate for all.
   const card = rateCards.find(rc =>
     Number(rc.sum_insured) === si &&
-    age >= rc.age_band_from && age <= rc.age_band_to
+    age >= rc.age_min && age <= rc.age_max
   );
   return card ? Number(card.annual_premium) : 0;
 }

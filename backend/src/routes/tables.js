@@ -28,6 +28,7 @@ const TABLE_ACCESS = {
   insurance_enrollment_manual:      { read: ['admin','hr','employee'], write: ['admin','hr'], delete: ['admin'] },
   policy_premium_details:           { read: ['admin','hr'],            write: ['admin','hr'], delete: ['admin'] },
   gmc_rate_cards:                   { read: ['admin','hr','employee'], write: ['admin'],      delete: ['admin'] },
+  gmc_premium_rates_26_27:          { read: ['admin','hr','employee'], write: ['admin'],      delete: ['admin'] },
   insurer_opening_balance:          { read: ['admin','hr'],            write: ['admin'],      delete: ['admin'] },
   user_profiles:                    { read: ['admin'],                 write: ['admin'],      delete: ['admin'] },
   user_concerns:                    { read: ['admin','hr','employee'], write: ['admin','hr','employee'], delete: ['admin'] },
