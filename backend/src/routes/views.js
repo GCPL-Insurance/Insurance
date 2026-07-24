@@ -72,6 +72,7 @@ router.get('/employee-full/:empId', async (req, res) => {
     { name: 'employee_blood_group',           col: 'emp_id' },
     { name: 'insurance_dependents',           col: 'emp_id' },
     { name: 'employee_gmc_enrollment',        col: 'emp_id' },
+    { name: 'enrollment_eligible_2026_27',    col: 'emp_id' },  // enrollment eligibility whitelist (26-27)
     { name: 'employee_gmc_enrollment_insured', col: 'emp_id' },  // ✅ ADDED: GMC enrollment insured members
     { name: 'employee_gmc_claims',            col: 'emp_id' },
     { name: 'employee_ctc_gmc_increment',     col: 'emp_id' },

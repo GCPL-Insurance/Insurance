@@ -4014,7 +4014,10 @@ async function renderEmployeeDashboardV2() {
 
   // Drive nav visibility: insurance eligibility = gmc_inclusion_date present;
   // existing (in insurance_dependents) → Renewal only; new joinee → Enrollment only.
-  applyRenewalNavGating(!!emp.gmc_inclusion_date, isExistingEmployee);
+  // Enrollment 2026-27 is whitelist-driven: emp_id must appear in
+  // enrollment_eligible_2026_27, otherwise the enrollment nav stays hidden.
+  const enrollEligible = (data.enrollment_eligible_2026_27 || []).length > 0;
+  applyRenewalNavGating(!!emp.gmc_inclusion_date, isExistingEmployee, enrollEligible);
 
   // Latest GMC enrollment (for new joinees)
   const latestGmcEnroll = gmcEnrolls.slice().sort((a, b) => {
@@ -5158,21 +5161,17 @@ window.initApp = initApp;
 //   • in insurance_dependents (existing) → Renewal only → hide Enrollment
 //   • else (eligible new joinee)         → Enrollment only → hide Renewal
 // Toggles both the sidebar items and the mobile bottom-nav buttons (both carry data-page).
-function applyRenewalNavGating(eligible, isExisting) {
+function applyRenewalNavGating(eligible, isExisting, enrollEligible) {
   if (state.role !== 'employee') return;
   const setShown = (page, shown) =>
     document.querySelectorAll(`[data-page="${page}"]`).forEach(el => { el.style.display = shown ? '' : 'none'; });
 
-  if (!eligible) {
-    setShown('gmc_enrollment_form', false);
-    setShown('gmc_renewal', false);
-  } else if (isExisting) {
-    setShown('gmc_enrollment_form', false);
-    setShown('gmc_renewal', true);
-  } else {
-    setShown('gmc_enrollment_form', true);
-    setShown('gmc_renewal', false);
-  }
+  // Renewal 2026-27 is closed — never shown to employees.
+  setShown('gmc_renewal', false);
+
+  // Enrollment 2026-27: shown ONLY if this emp_id is on the eligibility whitelist.
+  // The backend enforces the same rule; hiding here is convenience, not security.
+  setShown('gmc_enrollment_form', !!enrollEligible);
 }
 window.applyRenewalNavGating = applyRenewalNavGating;
 

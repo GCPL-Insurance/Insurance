@@ -572,9 +572,9 @@ router.get('/enrollment-data', requireAuth, enrollmentLimiter, async (req, res) 
   if (!emp_id) return res.status(400).json({ error: 'No emp_id linked to your account. Contact HR.' });
 
   // ── All data from employees table (canonical). No onboarding fallback. ────
-  let empRes, rateRes, enrollRes, profileRes, depsRes, ctcTotalRes;
+  let empRes, rateRes, enrollRes, profileRes, depsRes, ctcTotalRes, eligRes;
   try {
-    [empRes, rateRes, enrollRes, profileRes, depsRes, ctcTotalRes] = await Promise.all([
+    [empRes, rateRes, enrollRes, profileRes, depsRes, ctcTotalRes, eligRes] = await Promise.all([
       // 1. Employees — THE only source of employee data
       supabase.from('employees')
         .select('emp_id,emp_name,gender,date_of_birth,department,designation,date_of_joining,ctc_gmc_per_month,unit,gmc_inclusion_date,gmc_effective_date,email_id,is_active,status')
@@ -595,6 +595,9 @@ router.get('/enrollment-data', requireAuth, enrollmentLimiter, async (req, res) 
       // 6. CTC GMC total from view — THE only source, no JS fallback
       supabase.from('vw_employee_ctc_gmc_total')
         .select('total_ctc_gmc').eq('emp_id', emp_id).single(),
+      // 7. ENROLLMENT ELIGIBILITY — emp_id must be whitelisted for 2026-27
+      supabase.from('enrollment_eligible_2026_27')
+        .select('emp_id').eq('emp_id', emp_id).maybeSingle(),
     ]);
   } catch (err) {
     console.error('[enrollment-data] fetch error:', err.message);
@@ -604,6 +607,30 @@ router.get('/enrollment-data', requireAuth, enrollmentLimiter, async (req, res) 
   const emp = empRes?.data;
   if (!emp) return res.status(404).json({ error: 'Employee record not found. Please contact HR.' });
   if (!emp.is_active) return res.status(403).json({ error: 'Your account is inactive. Contact HR.' });
+
+  // ── ENROLLMENT ELIGIBILITY GATE (2026-27) ───────────────────────────────
+  // Only emp_ids listed in enrollment_eligible_2026_27 may open the enrollment.
+  if (!eligRes?.data) {
+    return res.status(403).json({
+      error: 'You are not eligible for GMC Enrollment 2026-27. Please contact HR if you believe this is incorrect.',
+      enrollment_eligible: false,
+    });
+  }
+
+  // Track the page visit (non-fatal) — feeds vw_enrollment_progress
+  try {
+    const { data: mon } = await supabase.from('enrollment_monitor_2026_27')
+      .select('page_visit_count').eq('emp_id', emp_id).maybeSingle();
+    await supabase.from('enrollment_monitor_2026_27').upsert({
+      emp_id,
+      full_name: emp.emp_name,
+      email_id: emp.email_id || null,
+      visited_enrollment_page_at: new Date().toISOString(),
+      page_visit_count: (mon?.page_visit_count || 0) + 1,
+      last_logged_in_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }, { onConflict: 'emp_id' });
+  } catch (e) { console.warn('[enrollment-data] monitor upsert failed:', e.message); }
 
   if (depsRes?.error)
     console.warn('[enrollment-data] insured fetch error:', depsRes.error.message);
@@ -637,6 +664,7 @@ router.get('/enrollment-data', requireAuth, enrollmentLimiter, async (req, res) 
     existing_dependents: depsRes?.data || [],
     // From vw_employee_ctc_gmc_total only — null = not on GMC yet (no proration fallback)
     ctc_gmc_total_from_view: ctcTotalRes?.data?.total_ctc_gmc ?? null,
+    enrollment_eligible: true,
   });
 });
 
@@ -680,6 +708,13 @@ router.post('/enrollment', requireAuth, enrollmentLimiter, async (req, res) => {
 
     if (!['save', 'submit'].includes(action))
       return send(400, { error: 'action must be "save" or "submit"' });
+
+    // ── ENROLLMENT ELIGIBILITY GATE (2026-27) ─────────────────────────────
+    // Authoritative check — never trust the client to have hidden the page.
+    const { data: eligRow } = await supabase
+      .from('enrollment_eligible_2026_27').select('emp_id').eq('emp_id', emp_id).maybeSingle();
+    if (!eligRow)
+      return send(403, { error: 'You are not eligible for GMC Enrollment 2026-27. Please contact HR.' });
     if (!enrollment || typeof enrollment !== 'object')
       return send(400, { error: 'enrollment data is required' });
 
@@ -821,6 +856,19 @@ router.post('/enrollment', requireAuth, enrollmentLimiter, async (req, res) => {
     // Return the DB-confirmed list so the frontend doesn't need a separate re-fetch.
     const { data: freshMembers } = await supabase
       .from('employee_gmc_enrollment_insured').select('*').eq('enrollment_id', enrollmentId);
+
+    // Track progress (non-fatal) — feeds vw_enrollment_progress
+    try {
+      const { data: mon } = await supabase.from('enrollment_monitor_2026_27')
+        .select('submission_attempt_count').eq('emp_id', emp_id).maybeSingle();
+      await supabase.from('enrollment_monitor_2026_27').upsert({
+        emp_id,
+        enrollment_id: enrollmentId,
+        submission_attempt_count: (mon?.submission_attempt_count || 0) + 1,
+        ...(action === 'submit' ? { submitted_at: now } : {}),
+        updated_at: now,
+      }, { onConflict: 'emp_id' });
+    } catch (e) { console.warn('[enrollment] monitor upsert failed:', e.message); }
 
     send(200, {
       success: true,
