@@ -346,8 +346,11 @@ router.post('/signup', authLimiter, async (req, res) => {
   if (profileErr)
     console.error('[signup] user_profiles upsert failed | code:', profileErr.code, '| msg:', profileErr.message);
 
-  await supabase.from('employees').update({ auth_uid: authData.user.id }).eq('emp_id', emp.emp_id)
-    .catch(e => console.warn('[signup] auth_uid link failed:', e.message));
+  try {
+    const { error: linkErr } = await supabase.from('employees')
+      .update({ auth_uid: authData.user.id }).eq('emp_id', emp.emp_id);
+    if (linkErr) console.warn('[signup] auth_uid link failed:', linkErr.message);
+  } catch (e) { console.warn('[signup] auth_uid link threw:', e.message); }
 
   res.status(201).json({ success: true, message: 'Account created! You can now sign in.', emp_name: emp.emp_name });
 });
@@ -774,11 +777,13 @@ router.post('/enrollment', requireAuth, enrollmentLimiter, async (req, res) => {
             .eq('enrollment_id', enrollmentId);
           // RECOVERY: store the full submitted payload in the audit table so the
           // member data the employee entered is never lost even if the insert fails.
-          await supabase.from('employee_gmc_enrollment_audit').insert({
-            enrollment_id: enrollmentId, emp_id, action: 'SUBMIT_FAILED', action_by: emp_id,
-            remarks: ('insured insert failed: ' + membInsErr.message).slice(0, 500),
-            payload: { enrollment: enrollmentData, insured_members }, created_at: now,
-          }).catch(e => console.warn('[enrollment] failure-audit insert failed:', e.message));
+          try {
+            await supabase.from('employee_gmc_enrollment_audit').insert({
+              enrollment_id: enrollmentId, emp_id, action: 'SUBMIT_FAILED', action_by: emp_id,
+              remarks: ('insured insert failed: ' + membInsErr.message).slice(0, 500),
+              payload: { enrollment: enrollmentData, insured_members }, created_at: now,
+            });
+          } catch (e) { console.warn('[enrollment] failure-audit insert failed:', e.message); }
           return send(400, { error: 'Failed to save insured members: ' + membInsErr.message });
         }
       } else {
@@ -789,20 +794,28 @@ router.post('/enrollment', requireAuth, enrollmentLimiter, async (req, res) => {
     }
 
     // ── Save summary (non-fatal) ──────────────────────────────────────────────
+    // NOTE: supabase-js query builders are PromiseLike (then only) — they have NO
+    // .catch(). Calling .catch() on them throws a TypeError. Always use try/catch.
     if (summary && enrollmentId) {
-      await supabase.from('employee_gmc_enrollment_summary').upsert(
-        { ...summary, enrollment_id: enrollmentId, emp_id, calculated_at: now },
-        { onConflict: 'enrollment_id' }
-      ).catch(e => console.warn('[enrollment] summary upsert failed:', e.message));
+      try {
+        const { error: sumErr } = await supabase.from('employee_gmc_enrollment_summary').upsert(
+          { ...summary, enrollment_id: enrollmentId, emp_id, calculated_at: now },
+          { onConflict: 'enrollment_id' }
+        );
+        if (sumErr) console.warn('[enrollment] summary upsert failed:', sumErr.message);
+      } catch (e) { console.warn('[enrollment] summary upsert threw:', e.message); }
     }
 
     // ── Audit trail (non-fatal) ───────────────────────────────────────────────
-    await supabase.from('employee_gmc_enrollment_audit').insert({
-      enrollment_id: enrollmentId, emp_id,
-      action: action === 'submit' ? 'SUBMIT' : 'DRAFT_SAVE',
-      action_by: emp_id, created_at: now,
-      payload: { enrollment: enrollmentData, insured_members: insured_members || [] },
-    }).catch(e => console.warn('[enrollment] audit insert failed:', e.message));
+    try {
+      const { error: audErr } = await supabase.from('employee_gmc_enrollment_audit').insert({
+        enrollment_id: enrollmentId, emp_id,
+        action: action === 'submit' ? 'SUBMIT' : 'DRAFT_SAVE',
+        action_by: emp_id, created_at: now,
+        payload: { enrollment: enrollmentData, insured_members: insured_members || [] },
+      });
+      if (audErr) console.warn('[enrollment] audit insert failed:', audErr.message);
+    } catch (e) { console.warn('[enrollment] audit insert threw:', e.message); }
 
     // ── Fetch fresh insured_members for response ──────────────────────────────
     // Return the DB-confirmed list so the frontend doesn't need a separate re-fetch.
