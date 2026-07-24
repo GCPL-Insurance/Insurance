@@ -377,8 +377,8 @@ router.get('/enrollment-data', authMiddleware, async (req, res) => {
       unit:               pick(mainEmp?.unit,               onboarding?.unit),
       gmc_inclusion_date: pick(mainEmp?.gmc_inclusion_date, onboarding?.gmc_inclusion_date),
       gmc_effective_date: mainEmp?.gmc_effective_date ?? null,
-      mobile_number:      pick(mainEmp?.mobile_number, onboarding?.mobile_number) ?? null,
-      email_id:           pick(mainEmp?.email_id, onboarding?.email_id) ?? null,
+      mobile_number:      mainEmp?.mobile_number ?? null,   // employees table only
+      email_id:           mainEmp?.email_id ?? null,        // employees table only
       onboarding_status:  onboarding?.onboarding_status ?? 'pending',
       _source:            mainEmp ? (onboarding ? 'merged' : 'employees_only') : 'onboarding_only',
     };
@@ -391,8 +391,8 @@ router.get('/enrollment-data', authMiddleware, async (req, res) => {
       enrollment: enrollmentDraft,
       rate_cards: rateRes?.data || [],
       profile: {
-        mobile_number: mainEmp?.mobile_number || onboarding?.mobile_number || enrollmentDraft?.mobile_number || null,
-        email:         onboarding?.email_id      || enrollmentDraft?.email_id      || null,
+        mobile_number: mainEmp?.mobile_number ?? null,      // employees table only
+        email:         mainEmp?.email_id ?? null,           // employees table only
       },
       existing_dependents: existingDependents,
       ctc_gmc_total_from_view: ctcTotalRes?.data?.total_ctc_gmc ?? null,
@@ -445,8 +445,9 @@ router.post('/enrollment', authMiddleware, async (req, res) => {
       return res.status(500).json({ error: 'Failed to save enrollment' });
     }
 
-    // ✅ FIX: Sync contact info to employees table (canonical source)
-    if (submit) {
+    // Sync contact info to the employees table ONLY (canonical source).
+    // Never written to employee_onboarding.
+    {
       try {
         const updatePayload = {};
         

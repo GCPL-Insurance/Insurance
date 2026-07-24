@@ -2206,9 +2206,9 @@ window.enrollState = enrollState;
 const POLICY_END_DATE = new Date('2027-07-23');
 const POLICY_YEAR_START = new Date('2026-07-24'); // For coverage days normalisation
 
-// Unit-aware CTC GMC end date: UNIT -3 FY ends 30 Jun, all others 31 Jul
-function getCTCGmcEndDate(unit) {
-  return (unit === 'UNIT -3') ? new Date('2027-06-30') : new Date('2027-07-31');
+// CTC GMC period end — 31 Jul 2027 for ALL units (no unit-wise variation for 26-27)
+function getCTCGmcEndDate(_unit) {
+  return new Date('2027-07-31');
 }
 
 function enrollFmt(v) {
@@ -2347,7 +2347,7 @@ async function renderEnrollmentForm() {
       c.innerHTML = `
         <div class="page-header">
           <div>
-            <div class="page-title">🏥 GMC Enrollment 2025–26</div>
+            <div class="page-title">🏥 GMC Enrollment 2026–27</div>
             <div class="page-sub">Group Medical Insurance · Magma General Insurance</div>
           </div>
         </div>
@@ -2386,7 +2386,7 @@ async function renderEnrollmentForm() {
       c.innerHTML = `
         <div class="page-header">
           <div>
-            <div class="page-title">🏥 GMC Enrollment 2025–26</div>
+            <div class="page-title">🏥 GMC Enrollment 2026–27</div>
             <div class="page-sub">Group Medical Insurance · Magma General Insurance</div>
           </div>
         </div>
@@ -2442,7 +2442,7 @@ function renderEnrollmentLocked(enrollment) {
   const statusColor = {APPROVED:'badge-green',SUBMITTED:'badge-blue',REJECTED:'badge-red',DRAFT:'badge-amber',CORRECTION_REQUIRED:'badge-amber'}[enrollment.enrollment_status] || 'badge-blue';
   c.innerHTML = `
     <div class="page-header">
-      <div><div class="page-title">🏥 GMC Enrollment 2025–26</div><div class="page-sub">Group Medical Insurance · Magma General Insurance</div></div>
+      <div><div class="page-title">🏥 GMC Enrollment 2026–27</div><div class="page-sub">Group Medical Insurance · Magma General Insurance</div></div>
       <span class="badge ${statusColor}">${enrollment.enrollment_status}</span>
     </div>
     <div style="background:white;border-radius:16px;border:2px solid #a7f3d0;padding:32px;text-align:center;box-shadow:var(--shadow)">
@@ -2511,7 +2511,7 @@ function renderEnrollStep(step) {
 
   const pageHeader = `
     <div class="page-header">
-      <div><div class="page-title">🏥 GMC Enrollment 2025–26</div><div class="page-sub">Group Medical Insurance · Magma General Insurance Limited</div></div>
+      <div><div class="page-title">🏥 GMC Enrollment 2026–27</div><div class="page-sub">Group Medical Insurance · Magma General Insurance Limited</div></div>
     </div>
     ${statusBanner}
     ${enrollStepBar(step)}
@@ -2530,7 +2530,7 @@ function renderEnrollStep1() {
   <div class="section-card">
     <div class="section-title">📋 Group Medical Insurance Policy — Terms & Conditions (2026–27)</div>
     <div style="border:1.5px solid var(--border);border-radius:10px;height:360px;overflow-y:auto;padding:20px 24px;font-size:13px;line-height:1.9;background:var(--surface2);margin-bottom:16px" id="tc-scroll">
-      <div style="font-weight:700;font-size:14px;color:#0f172a;margin-bottom:12px">Policy Guidelines for 2025–26</div>
+      <div style="font-weight:700;font-size:14px;color:#0f172a;margin-bottom:12px">Policy Guidelines for 2026–27</div>
 
       <b>1. Mandatory Enrollment</b><br/>
       Insurance coverage is <strong>mandatory for employees (Self)</strong>. Coverage for family members is optional at the employee's discretion.<br/><br/>
@@ -2542,7 +2542,7 @@ function renderEnrollStep1() {
 
       <b>3. Premium Contribution</b><br/>
       • Additional premium (after CTC GMC adjustment) recovered via equal monthly EMIs.<br/>
-      • Premium is pro-rated from Date of Joining to 23rd July 2026.<br/><br/>
+      • Premium is pro-rated from Date of Joining to 23rd July 2027.<br/><br/>
 
       <div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:12px 16px;margin:12px 0">
         <div style="font-weight:700;color:#991b1b;margin-bottom:8px">🔴 Critical Policy Conditions</div>
@@ -2556,7 +2556,7 @@ function renderEnrollStep1() {
       • <strong>Insurer:</strong> Magma General Insurance Limited<br/>
       • <strong>TPA:</strong> Medi Assist Insurance TPA Pvt. Ltd.<br/>
       • <strong>Broker:</strong> Ensign Insurance Brokers Pvt. Ltd.<br/>
-      • <strong>Policy Period:</strong> Date of Joining to <strong>23rd July 2026</strong><br/><br/>
+      • <strong>Policy Period:</strong> Date of Joining to <strong>23rd July 2027</strong><br/><br/>
 
       <b>Contact for Assistance:</b><br/>
       • Dr. Naveen – naveen.paun@globalcalciumpharma.com | 99430 12226<br/>
