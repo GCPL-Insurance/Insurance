@@ -79,8 +79,8 @@ const TABLES = {
     insertable: true,
   },
   t_gmc_rate_cards: {
-    name: 'gmc_rate_cards', label: 'GMC Rate Cards', key: 'rate_card_id',
-    columns: ['rate_card_id','rate_card_type','age_band_from','age_band_to','sum_insured','annual_premium'],
+    name: 'gmc_premium_rates_26_27', label: 'GMC Premium Rates 26-27', key: 'id',
+    columns: ['id','sum_insured','age_min','age_max','annual_premium','notes'],
     insertable: true,
   },
   t_opening_balance: {
@@ -2239,18 +2239,28 @@ function coverageDays(startDateStr) {
 }
 
 function ctcGmcAvailable(ctcGmcPerMonth, unit, emp) {
-  // CTC GMC total must come exclusively from vw_employee_ctc_gmc_total.
-  // This fallback function is intentionally a no-op — if the view returns null,
-  // the employee is not yet on GMC or the view hasn't been populated.
-  // Never calculate from DOJ or any other date — return 0 to show Nil deduction.
-  return 0;
+  // CTC GMC available for 2026-27:
+  //   one day's GMC = ctc_gmc_per_month * 12 / 365
+  //   total         = one-day value * days from Date of Joining -> 31 Jul 2027 (inclusive)
+  // Same period for ALL units. Mirrors fn_recalculate_enrollment_summary in the DB.
+  const perMonth = Number(ctcGmcPerMonth) || 0;
+  if (perMonth <= 0) return 0;
+  const dojStr = emp?.date_of_joining;
+  if (!dojStr) return 0;
+  const doj = new Date(dojStr);
+  if (isNaN(doj.getTime())) return 0;
+  const end  = getCTCGmcEndDate(unit);        // 31 Jul 2027
+  const days = Math.floor((end - doj) / 86400000) + 1;
+  if (days <= 0) return 0;
+  return Math.round(perMonth * 12 / 365 * days);
 }
 
 function getInsurerPremium(rateCards, si, age) {
-  // Find INSURER rate card matching sum_insured and age band
+  // Single 26-27 rate card (gmc_premium_rates_26_27): matched on sum_insured + age band.
+  // No rate_card_type / insurer split — one premium for all.
   const card = rateCards.find(rc =>
-    Number(rc.sum_insured) === si &&
-    age >= rc.age_band_from && age <= rc.age_band_to
+    Number(rc.sum_insured) === Number(si) &&
+    age >= Number(rc.age_min) && age <= Number(rc.age_max)
   );
   return card ? Number(card.annual_premium) : 0;
 }
@@ -2293,9 +2303,8 @@ function calcPremiumSummary() {
 
   const totalPremium = memberRows.reduce((s, r) => s + r.prorated_premium, 0);
   // Use view total when available; fall back to proration formula otherwise.
-  const totalCtc     = (enrollState.ctcGmcTotalFromView != null)
-    ? enrollState.ctcGmcTotalFromView
-    : ctcGmcAvailable(Number(emp.ctc_gmc_per_month), emp.unit, emp);
+  // 26-27: always compute (the 25-26 view is not valid for this policy year)
+  const totalCtc     = ctcGmcAvailable(Number(emp.ctc_gmc_per_month), emp.unit, emp);
   const deduction    = Math.max(0, totalPremium - totalCtc);
   const refund       = Math.max(0, totalCtc - totalPremium);
 
@@ -2810,9 +2819,8 @@ function renderLivePremiumTable() {
   const totalPremium = rows.reduce((s, r) => s + r.prorated, 0);
   // Use view total when available; fall back to JS fallback otherwise.
   // Fallback uses gmc_effective_date (via emp object) — NOT doj or gmc_inclusion_date.
-  const totalCtc = (enrollState.ctcGmcTotalFromView != null)
-    ? enrollState.ctcGmcTotalFromView
-    : ctcGmcAvailable(emp.ctc_gmc_per_month || 0, emp.unit, emp);
+  // 26-27: always compute (the 25-26 view is not valid for this policy year)
+  const totalCtc = ctcGmcAvailable(emp.ctc_gmc_per_month || 0, emp.unit, emp);
   const deduction = Math.max(0, totalPremium - totalCtc);
   const refund    = Math.max(0, totalCtc - totalPremium);
 
