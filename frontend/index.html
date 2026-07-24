@@ -186,7 +186,7 @@
       <div class="sidebar-item" data-page="gmc_enrollment_form" data-employee-only onclick="navigateAndClose('gmc_enrollment_form')">
         <span class="icon">📝</span><span class="label">My GMC Enrollment</span>
       </div>
-      <div class="sidebar-item" data-page="gmc_renewal" data-employee-only onclick="navigateAndClose('gmc_renewal')">
+      <div class="sidebar-item" data-page="gmc_renewal" data-employee-only style="display:none" onclick="navigateAndClose('gmc_renewal')">
         <span class="icon">🔄</span><span class="label">GMC Renewal 2026-27</span><span class="renewal-star" aria-hidden="true">⭐</span>
       </div>
 
@@ -304,7 +304,7 @@
     <span class="mbn-icon">📝</span>
     <span class="mbn-label">Enrollment</span>
   </button>
-  <button class="mbn-item" id="mbn-renewal" onclick="navigateAndClose('gmc_renewal')" data-page="gmc_renewal" style="position:relative">
+  <button class="mbn-item" id="mbn-renewal" onclick="navigateAndClose('gmc_renewal')" data-page="gmc_renewal" style="position:relative;display:none">
     <span class="mbn-icon">🔄</span>
     <span class="mbn-label">Renewal</span>
     <span class="renewal-star renewal-star-mbn" aria-hidden="true">⭐</span>

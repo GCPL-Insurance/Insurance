@@ -79,8 +79,8 @@ const TABLES = {
     insertable: true,
   },
   t_gmc_rate_cards: {
-    name: 'gmc_premium_rates_26_27', label: 'GMC Premium Rates 26-27', key: 'id',
-    columns: ['id','sum_insured','age_min','age_max','annual_premium','notes'],
+    name: 'gmc_rate_cards', label: 'GMC Rate Cards', key: 'rate_card_id',
+    columns: ['rate_card_id','rate_card_type','age_band_from','age_band_to','sum_insured','annual_premium'],
     insertable: true,
   },
   t_opening_balance: {
@@ -2203,12 +2203,12 @@ let enrollState = {
 // invisible to inline event attributes which run in global (window) scope.
 window.enrollState = enrollState;
 
-const POLICY_END_DATE = new Date('2026-07-23');
-const POLICY_YEAR_START = new Date('2025-07-24'); // For coverage days normalisation
+const POLICY_END_DATE = new Date('2027-07-23');
+const POLICY_YEAR_START = new Date('2026-07-24'); // For coverage days normalisation
 
 // Unit-aware CTC GMC end date: UNIT -3 FY ends 30 Jun, all others 31 Jul
 function getCTCGmcEndDate(unit) {
-  return (unit === 'UNIT -3') ? new Date('2026-06-30') : new Date('2026-07-31');
+  return (unit === 'UNIT -3') ? new Date('2027-06-30') : new Date('2027-07-31');
 }
 
 function enrollFmt(v) {
@@ -2232,7 +2232,7 @@ function effectiveStartDate(emp) {
 }
 
 function coverageDays(startDateStr) {
-  // Policy days: effective start date → 23 Jul 2026 (inclusive)
+  // Policy days: effective start date → 23 Jul 2027 (inclusive)
   const doj = new Date(startDateStr);
   const days = Math.floor((POLICY_END_DATE - doj) / 86400000) + 1;
   return Math.max(0, days);
@@ -2247,11 +2247,10 @@ function ctcGmcAvailable(ctcGmcPerMonth, unit, emp) {
 }
 
 function getInsurerPremium(rateCards, si, age) {
-  // Single 26-27 rate card: matched on sum_insured + age band (age_min..age_max).
-  // No rate_card_type — one rate for all.
+  // Find INSURER rate card matching sum_insured and age band
   const card = rateCards.find(rc =>
     Number(rc.sum_insured) === si &&
-    age >= rc.age_min && age <= rc.age_max
+    age >= rc.age_band_from && age <= rc.age_band_to
   );
   return card ? Number(card.annual_premium) : 0;
 }
@@ -2529,7 +2528,7 @@ function renderEnrollStep(step) {
 function renderEnrollStep1() {
   return `
   <div class="section-card">
-    <div class="section-title">📋 Group Medical Insurance Policy — Terms & Conditions (2025–26)</div>
+    <div class="section-title">📋 Group Medical Insurance Policy — Terms & Conditions (2026–27)</div>
     <div style="border:1.5px solid var(--border);border-radius:10px;height:360px;overflow-y:auto;padding:20px 24px;font-size:13px;line-height:1.9;background:var(--surface2);margin-bottom:16px" id="tc-scroll">
       <div style="font-weight:700;font-size:14px;color:#0f172a;margin-bottom:12px">Policy Guidelines for 2025–26</div>
 
@@ -2570,7 +2569,7 @@ function renderEnrollStep1() {
 
     <div style="display:flex;align-items:flex-start;gap:12px;background:#f0fdf4;border:1.5px solid #a7f3d0;border-radius:10px;padding:14px 18px;cursor:pointer;margin-bottom:12px">
       <input type="checkbox" id="tc-cb" style="width:18px;height:18px;margin-top:2px;flex-shrink:0;accent-color:#059669" ${enrollState.termsAccepted?'checked':''} onchange="enrollState.termsAccepted=this.checked;document.getElementById('btn-proceed-tc').disabled=!this.checked"/>
-      <label for="tc-cb" style="font-size:13px;line-height:1.6;cursor:pointer">I <strong>have read and fully understood</strong> the Group Medical Insurance Policy terms and conditions for 2025–26, including all coverage details, restrictions, and premium obligations.</label>
+      <label for="tc-cb" style="font-size:13px;line-height:1.6;cursor:pointer">I <strong>have read and fully understood</strong> the Group Medical Insurance Policy terms and conditions for 2026–27, including all coverage details, restrictions, and premium obligations.</label>
     </div>
 
     <button class="btn btn-primary" id="btn-proceed-tc" onclick="renderEnrollStep(2)" ${enrollState.termsAccepted?'':'disabled'}>
@@ -2977,7 +2976,7 @@ function renderEnrollStep4() {
     <div class="section-title">💰 Premium Calculation</div>
     <div style="font-size:13px;color:var(--text3);margin-bottom:16px">
       Based on <strong>Magma General Insurance INSURER rate card</strong>. Premium is pro-rated from ${enrollState.gmcInclusionDate ? 'GMC Inclusion Date' : 'Date of Joining'} (${fmtDate(effectiveStartDate(emp))}) to 23 Jul 2026.
-      CTC GMC is calculated from Date of Joining to 31 Jul 2026.
+      CTC GMC is calculated from Date of Joining to 31 Jul 2027.
     </div>
 
     <div style="overflow-x:auto;margin-bottom:20px">
@@ -3007,7 +3006,7 @@ function renderEnrollStep4() {
         <div style="background:rgba(255,255,255,.1);border-radius:10px;padding:14px">
           <div style="font-size:11px;opacity:.75;text-transform:uppercase;letter-spacing:.06em">CTC GMC Available</div>
           <div style="font-size:22px;font-weight:800;margin-top:4px">${enrollFmt(s.totalCtc)}</div>
-          <div style="font-size:11px;opacity:.6;margin-top:2px">Pro-rated to 31 Jul 2026</div>
+          <div style="font-size:11px;opacity:.6;margin-top:2px">Pro-rated to 31 Jul 2027</div>
         </div>
         ${s.deduction > 0 ? `
         <div style="background:rgba(220,38,38,.25);border-radius:10px;padding:14px">
@@ -3070,7 +3069,7 @@ function renderEnrollStep5() {
     <!-- Final consent -->
     <div style="display:flex;align-items:flex-start;gap:12px;background:#f0fdf4;border:1.5px solid #a7f3d0;border-radius:10px;padding:14px 18px;cursor:pointer;margin-bottom:16px" onclick="var cb=document.getElementById('final-cb');cb.checked=!cb.checked;enrollState.finalAccepted=cb.checked;document.getElementById('btn-submit-enroll').disabled=!cb.checked">
       <input type="checkbox" id="final-cb" style="width:18px;height:18px;margin-top:2px;flex-shrink:0;accent-color:#059669" onclick="event.stopPropagation()" onchange="enrollState.finalAccepted=this.checked;document.getElementById('btn-submit-enroll').disabled=!this.checked"/>
-      <label for="final-cb" style="font-size:13px;line-height:1.6;cursor:pointer" onclick="event.stopPropagation()">I <strong>hereby declare</strong> that all information provided in this enrollment form is true, accurate, and complete. I consent to enroll myself and listed dependents under the Group Medical Insurance Policy 2025–26.</label>
+      <label for="final-cb" style="font-size:13px;line-height:1.6;cursor:pointer" onclick="event.stopPropagation()">I <strong>hereby declare</strong> that all information provided in this enrollment form is true, accurate, and complete. I consent to enroll myself and listed dependents under the Group Medical Insurance Policy 2026–27.</label>
     </div>
 
     <div style="display:flex;gap:10px">
@@ -4125,12 +4124,7 @@ async function renderEmployeeDashboardV2() {
         <div class="stat-value">${claims.length}</div>
         <div class="stat-sub">Filed under GMC</div>
       </div>
-      <div class="stat-card amber">
-        <div class="stat-icon">🔄</div>
-        <div class="stat-label">2026-27 Renewal</div>
-        <div class="stat-value" style="font-size:16px">${latestRenewal ? (latestRenewal.enrollment_status === 'SUBMITTED' ? 'Submitted' : latestRenewal.enrollment_status) : 'Pending'}</div>
-        <div class="stat-sub">Renewal status</div>
-      </div>
+
     </div>
 
     <!-- Correction concern notice -->
@@ -4188,15 +4182,7 @@ async function renderEmployeeDashboardV2() {
       isNewJoinee  // ✅ KEY RULE: Only show if NOT existing employee
     )}
 
-    ${renderSection(
-      '2026-27 Renewal', '🔄',
-      latestRenewal?.enrollment_status || 'PENDING',
-      renewalInsured.filter(m => !latestRenewal || m.enrollment_id === latestRenewal.enrollment_id),
-      latestRenewal
-        ? `Renewal submitted on ${fmtDate(latestRenewal.submitted_at)}.`
-        : 'Renewal not yet submitted. Use "GMC Renewal 2026-27" in the sidebar.',
-      true  // Renewal section always shown
-    )}
+    ${'' /* 2026-27 renewal portal hidden — 25-26 cycle complete */}
 
     <!-- Claims -->
     <div style="font-size:15px;font-weight:700;margin:24px 0 12px;color:#0f172a">🏥 GMC Claims</div>
@@ -4613,7 +4599,7 @@ async function generateFFStatement() {
           <div class="ff-header-company">Global Calcium Pvt Limited</div>
           <div class="ff-header-title">Full &amp; Final — GMC Settlement Statement</div>
           <div class="ff-header-sub">
-            Group Medical Cover &nbsp;·&nbsp; Policy Year 24 Jul 2025 – 23 Jul 2026
+            Group Medical Cover &nbsp;·&nbsp; Policy Year 24 Jul 2026 – 23 Jul 2027
             &nbsp;·&nbsp; Magma General Insurance Limited / Medi Assist TPA
           </div>
         </div>
@@ -4881,7 +4867,7 @@ function downloadFFPDF() {
     doc.setFontSize(16); doc.setTextColor(255,255,255);
     doc.text('Full & Final - GMC Settlement Statement', M, 21);
     doc.setFontSize(8); doc.setFont('helvetica','normal'); doc.setTextColor(180,205,245);
-    doc.text('Group Medical Cover | Policy Year 24 Jul 2025 - 23 Jul 2026 | Magma General Insurance', M, 30);
+    doc.text('Group Medical Cover | Policy Year 24 Jul 2026 - 23 Jul 2027 | Magma General Insurance', M, 30);
 
     let y = 46;
     doc.setTextColor(15,23,42);

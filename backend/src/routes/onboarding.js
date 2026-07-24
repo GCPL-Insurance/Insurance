@@ -317,7 +317,7 @@ router.get('/enrollment-data', authMiddleware, async (req, res) => {
         // 1. employees table (canonical HR master)
         supabase
           .from('employees')
-          .select('emp_id, emp_name, gender, date_of_birth, date_of_joining, department, designation, ctc_gmc_per_month, unit, gmc_inclusion_date, gmc_effective_date')
+          .select('emp_id, emp_name, gender, date_of_birth, date_of_joining, department, designation, ctc_gmc_per_month, unit, gmc_inclusion_date, gmc_effective_date, mobile_number, email_id')
           .eq('emp_id', emp_id)
           .single(),
         // 2. employee_onboarding (new employees / contact fields)
@@ -377,8 +377,8 @@ router.get('/enrollment-data', authMiddleware, async (req, res) => {
       unit:               pick(mainEmp?.unit,               onboarding?.unit),
       gmc_inclusion_date: pick(mainEmp?.gmc_inclusion_date, onboarding?.gmc_inclusion_date),
       gmc_effective_date: mainEmp?.gmc_effective_date ?? null,
-      mobile_number:      onboarding?.mobile_number ?? null,
-      email_id:           onboarding?.email_id ?? null,
+      mobile_number:      pick(mainEmp?.mobile_number, onboarding?.mobile_number) ?? null,
+      email_id:           pick(mainEmp?.email_id, onboarding?.email_id) ?? null,
       onboarding_status:  onboarding?.onboarding_status ?? 'pending',
       _source:            mainEmp ? (onboarding ? 'merged' : 'employees_only') : 'onboarding_only',
     };
@@ -391,7 +391,7 @@ router.get('/enrollment-data', authMiddleware, async (req, res) => {
       enrollment: enrollmentDraft,
       rate_cards: rateRes?.data || [],
       profile: {
-        mobile_number: onboarding?.mobile_number || enrollmentDraft?.mobile_number || null,
+        mobile_number: mainEmp?.mobile_number || onboarding?.mobile_number || enrollmentDraft?.mobile_number || null,
         email:         onboarding?.email_id      || enrollmentDraft?.email_id      || null,
       },
       existing_dependents: existingDependents,
@@ -491,7 +491,7 @@ router.post('/enrollment', authMiddleware, async (req, res) => {
       }
 
       if (empData) {
-        const POLICY_END = new Date('2026-07-31');
+        const POLICY_END = new Date('2027-07-23');  // GMC coverage end 23 Jul 2027
         const doj = empData.date_of_joining;
         const sumInsured = Number(enrollment_data.sum_insured || 300000);
 
