@@ -292,6 +292,10 @@ export const adminEnrollment = {
 };
 
 // ─── GMC Renewal 2026-27 ──────────────────────────────────────────────────────
+export const enrollmentAdmin = {
+  progress: () => apiFetch('/auth/enrollment/admin/progress'),
+};
+
 export const renewal = {
   eligibility: (emp_id) => {
     const qs = emp_id ? `?emp_id=${encodeURIComponent(emp_id)}` : '';
