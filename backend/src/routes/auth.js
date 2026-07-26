@@ -577,7 +577,7 @@ router.get('/enrollment-data', requireAuth, enrollmentLimiter, async (req, res) 
     [empRes, rateRes, enrollRes, profileRes, depsRes, ctcTotalRes, eligRes] = await Promise.all([
       // 1. Employees — THE only source of employee data
       supabase.from('employees')
-        .select('emp_id,emp_name,gender,date_of_birth,department,designation,date_of_joining,ctc_gmc_per_month,unit,gmc_inclusion_date,gmc_effective_date,email_id,is_active,status')
+        .select('emp_id,emp_name,gender,date_of_birth,department,designation,date_of_joining,ctc_gmc_per_month,unit,gmc_inclusion_date,gmc_effective_date,email_id,mobile_number,is_active,status')
         .eq('emp_id', emp_id).single(),
       // 2. Rate cards for sum insured options
       supabase.from('gmc_premium_rates_26_27')
@@ -652,8 +652,9 @@ router.get('/enrollment-data', requireAuth, enrollmentLimiter, async (req, res) 
       unit:               emp.unit,
       gmc_inclusion_date: emp.gmc_inclusion_date,
       gmc_effective_date: emp.gmc_effective_date,
-      // email_id from employees table (HR uploaded)
+      // email_id + mobile_number from employees table (HR uploaded) — canonical source
       email_id:           emp.email_id || profileRes.data?.email || null,
+      mobile_number:      emp.mobile_number || null,
       _source:            'employees',
     },
     rate_cards:          rateRes.data || [],

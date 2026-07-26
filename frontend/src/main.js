@@ -2633,26 +2633,9 @@ function renderEnrollStep2(emp) {
   </div>
 
   <div class="section-card">
-    <div class="section-title">🏥 Select Sum Insured (Family Floater)</div>
-    <div style="font-size:13px;color:var(--text3);margin-bottom:16px">Minimum ₹3,00,000. <span style="color:var(--danger);font-weight:600">⚠️ Once selected and approved, sum insured cannot be reduced in future renewals.</span></div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:16px">
-      ${siSet.map(si => {
-        const isSel = enrollState.selectedSI===si;
-        const label = si===300000?'Minimum (Standard)':si===400000?'Enhanced':si===500000?'Premium':si===600000?'Elite':si===700000?'Super Elite':'Maximum';
-        return `
-        <div onclick="enrollState.selectedSI=${si};document.querySelectorAll('.si-card').forEach(el=>{el.classList.remove('si-selected');el.style.border='2px solid var(--border)';el.style.background='white';el.querySelector('.si-check').style.display='none'});this.classList.add('si-selected');this.style.border='2px solid #1d4ed8';this.style.background='#dbeafe';this.querySelector('.si-check').style.display='block'"
-          class="si-card${isSel?' si-selected':''}"
-          style="border:2px solid ${isSel?'#1d4ed8':'var(--border)'};background:${isSel?'#dbeafe':'white'};border-radius:12px;padding:16px;text-align:center;cursor:pointer;transition:.2s;position:relative">
-          <div class="si-check" style="position:absolute;top:6px;right:8px;color:#1d4ed8;font-weight:800;font-size:14px;display:${isSel?'block':'none'}">✓</div>
-          <div style="font-size:18px;font-weight:800;color:#0f172a">${enrollFmt(si)}</div>
-          <div style="font-size:11px;color:var(--text3);margin-top:4px">${label}</div>
-        </div>`;
-      }).join('')}
-    </div>
-
     <div style="display:flex;gap:10px;margin-top:8px">
       <button class="btn btn-secondary" onclick="renderEnrollStep(1)">← Back</button>
-      <button class="btn btn-primary" onclick="enrollStep2Next()">Next: Add Dependents →</button>
+      <button class="btn btn-primary" onclick="enrollStep2Next()">Next: Sum Insured &amp; Dependents →</button>
     </div>
   </div>`;
 }
@@ -2662,13 +2645,39 @@ function enrollStep2Next() {
   const email  = document.getElementById('enroll-email')?.value?.trim()  || enrollState.email;
   if (!/^\d{10}$/.test(mobile)) { showToast('Please enter a valid 10-digit mobile number', 'error'); return; }
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { showToast('Please enter a valid email address', 'error'); return; }
-  if (!enrollState.selectedSI) { showToast('Please select a Sum Insured', 'error'); return; }
   enrollState.mobile = mobile;
   enrollState.email  = email;
   renderEnrollStep(3);
 }
 
 // ── STEP 3+4 COMBINED: Dependents & Premium ─────────────────────────────────
+function renderSumInsuredCard(onStep3) {
+  const ALLOWED_SI = [300000, 400000, 500000, 600000, 700000, 1000000];
+  const allSI = [...new Set((enrollState.rateCards||[]).map(rc => Number(rc.sum_insured)))].sort((a,b)=>a-b);
+  let siSet = allSI.filter(si => ALLOWED_SI.includes(si));
+  if (!siSet.length) siSet = ALLOWED_SI.slice();
+  const reRender = onStep3 ? ";renderEnrollStep(3)" : "";
+  return `
+  <div class="section-card">
+    <div class="section-title">🏥 Select Sum Insured (Family Floater)</div>
+    <div style="font-size:13px;color:var(--text3);margin-bottom:16px">Minimum ₹3,00,000. <span style="color:var(--danger);font-weight:600">⚠️ Once selected and approved, sum insured cannot be reduced in future renewals.</span></div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:4px">
+      ${siSet.map(si => {
+        const isSel = enrollState.selectedSI===si;
+        const label = si===300000?'Minimum (Standard)':si===400000?'Enhanced':si===500000?'Premium':si===600000?'Elite':si===700000?'Super Elite':'Maximum';
+        return `
+        <div onclick="enrollState.selectedSI=${si}${reRender}"
+          class="si-card${isSel?' si-selected':''}"
+          style="border:2px solid ${isSel?'#1d4ed8':'var(--border)'};background:${isSel?'#dbeafe':'white'};border-radius:12px;padding:16px;text-align:center;cursor:pointer;transition:.2s;position:relative">
+          <div class="si-check" style="position:absolute;top:6px;right:8px;color:#1d4ed8;font-weight:800;font-size:14px;display:${isSel?'block':'none'}">✓</div>
+          <div style="font-size:18px;font-weight:800;color:#0f172a">${enrollFmt(si)}</div>
+          <div style="font-size:11px;color:var(--text3);margin-top:4px">${label}</div>
+        </div>`;
+      }).join('')}
+    </div>
+  </div>`;
+}
+
 function renderEnrollStep3() {
   const emp = enrollState.emp;
   const deps = enrollState.dependents;
@@ -2757,6 +2766,7 @@ function renderEnrollStep3() {
   ) : '';
 
   return `
+  ${renderSumInsuredCard(true)}
   ${editFormHtml}
   ${addBarHtml}
 
@@ -2949,6 +2959,7 @@ function removeDependent(idx) {
 }
 
 function enrollStep3Next() {
+  if (!enrollState.selectedSI) { showToast('Please select a Sum Insured', 'error'); return; }
   const emp = enrollState.emp;
   const doj = effectiveStartDate(emp);   // gmc_inclusion_date ?? date_of_joining
 
@@ -4184,6 +4195,22 @@ async function renderEmployeeDashboardV2() {
       isExistingEmployee ? `Your finalized 2025-26 policy with ${insDeps.length} member(s).` : null,
       isExistingEmployee
     )}
+
+    ${(function(){
+      // Enrollment CTA — shown to whitelisted employees who haven't submitted yet,
+      // so they can start enrollment straight from the dashboard even if the
+      // sidebar item is hidden/missed. enrollEligible comes from the whitelist.
+      const submitted = latestGmcEnroll?.enrollment_status === 'SUBMITTED';
+      if (!enrollEligible || submitted) return '';
+      return `
+      <div style="background:linear-gradient(135deg,#eff6ff,#dbeafe);border:1px solid #bfdbfe;border-radius:14px;padding:18px 20px;margin-bottom:16px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px">
+        <div>
+          <div style="font-weight:700;font-size:15px;color:#1e3a8a">📋 GMC Enrollment 2026-27 — Action Required</div>
+          <div style="font-size:13px;color:#1e40af;margin-top:4px">Your enrollment is <strong>pending</strong>. Please review your details, choose your sum insured and dependents, and submit.</div>
+        </div>
+        <button class="btn btn-primary" onclick="navigateAndClose('gmc_enrollment_form')" style="white-space:nowrap">Start Enrollment →</button>
+      </div>`;
+    })()}
 
     ${renderSection(
       'GMC Enrollment (New Joinee)', '🆕',
