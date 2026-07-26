@@ -1131,4 +1131,32 @@ router.post('/resend-otp', authLimiter, async (req, res) => {
   return res.json({ ok: true, email_masked: _maskEmail(pend.email) });
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// ADMIN: GET /api/auth/enrollment/admin/progress  — enrollment progress dashboard
+// Mirrors renewal progress. Reads vw_enrollment_progress.
+// ─────────────────────────────────────────────────────────────────────────────
+router.get('/enrollment/admin/progress', requireAuth, async (req, res) => {
+  if (!['admin', 'hr'].includes(req.user.role)) return res.status(403).json({ error: 'Admin/HR only' });
+  const PAGE = 1000;
+  let rows = [];
+  for (let from = 0; from < 100000; from += PAGE) {
+    const { data, error } = await supabase
+      .from('vw_enrollment_progress').select('*')
+      .order('emp_id').range(from, from + PAGE - 1);
+    if (error) return res.status(400).json({ error: error.message });
+    rows = rows.concat(data || []);
+    if (!data || data.length < PAGE) break;
+  }
+  const totals = {
+    total_eligible:        rows.length,
+    submitted:             rows.filter(r => r.stage === 'SUBMITTED').length,
+    visited_not_submitted: rows.filter(r => r.stage === 'VISITED_NOT_SUBMITTED').length,
+    logged_in_not_visited: rows.filter(r => r.stage === 'LOGGED_IN_NOT_VISITED').length,
+    never_logged_in:       rows.filter(r => r.stage === 'NEVER_LOGGED_IN').length,
+  };
+  totals.progress_percent = totals.total_eligible
+    ? Math.round((totals.submitted / totals.total_eligible) * 100) : 0;
+  res.json({ data: rows, totals });
+});
+
 export default router;

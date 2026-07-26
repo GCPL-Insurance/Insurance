@@ -3,7 +3,7 @@ import { jsPDF } from 'jspdf';
 import 'jspdf-autotable';
 import './style.css';
 // ✅ All data goes through our Express backend. Zero direct Supabase calls here.
-import { auth, tables, views, admin, apiFetch, enrollment, adminEnrollment, tokenStore, renewal } from './lib/api.js';
+import { auth, tables, views, admin, apiFetch, enrollment, adminEnrollment, tokenStore, renewal, enrollmentAdmin } from './lib/api.js';
 
 // ─── STATE ─────────────────────────────────────────────────────────────────────
 let state = {
@@ -5094,6 +5094,7 @@ async function renderPageV2(page) {
   if (page === 'ff_statement')       { await renderFFStatementPage(); return; }
   if (page === 'gmc_renewal')             { await renderRenewalPage(); return; }
   if (page === 'admin_renewal_progress')  { await renderAdminRenewalProgress(); return; }
+  if (page === 'admin_enrollment_progress') { await renderAdminEnrollmentProgress(); return; }
   if (TABLES[page])                  { await renderTable(page); return; }
 }
 
@@ -6022,6 +6023,89 @@ window.renewalState         = renewalState;
 // ═══════════════════════════════════════════════════════════════════════════════
 // ─── ADMIN: Renewal Progress Dashboard ────────────────────────────────────────
 // ═══════════════════════════════════════════════════════════════════════════════
+async function renderAdminEnrollmentProgress() {
+  const c = document.getElementById('content');
+  c.innerHTML = `<div class="loading"><div class="spinner"></div> Loading enrollment progress…</div>`;
+
+  let res;
+  try { res = await enrollmentAdmin.progress(); }
+  catch (e) { c.innerHTML = `<div class="empty-state"><div class="icon">⚠️</div>${e.message}</div>`; return; }
+
+  const rows = res.data || [];
+  const t = res.totals || {};
+
+  c.innerHTML = `
+    <div class="stats-grid" style="margin-bottom:20px">
+      <div class="stat-card blue"><div class="stat-icon">👥</div><div class="stat-label">Eligible Employees</div><div class="stat-value">${t.total_eligible || 0}</div></div>
+      <div class="stat-card green"><div class="stat-icon">✅</div><div class="stat-label">Submitted</div><div class="stat-value">${t.submitted || 0}</div><div class="stat-sub">${t.progress_percent || 0}%</div></div>
+      <div class="stat-card amber"><div class="stat-icon">👀</div><div class="stat-label">Visited / Not Submitted</div><div class="stat-value">${t.visited_not_submitted || 0}</div></div>
+      <div class="stat-card blue"><div class="stat-icon">🔑</div><div class="stat-label">Logged In / Not Visited</div><div class="stat-value">${t.logged_in_not_visited || 0}</div></div>
+      <div class="stat-card purple"><div class="stat-icon">🚪</div><div class="stat-label">Never Logged In</div><div class="stat-value">${t.never_logged_in || 0}</div></div>
+    </div>
+
+    <div style="background:white;border:1px solid var(--border);border-radius:14px;padding:16px;margin-bottom:16px">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:12px">
+        <h3 style="margin:0">📋 Per-Employee Enrollment Progress</h3>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <input type="text" id="adm-enroll-search" placeholder="🔍 Search emp_id / name…"
+            oninput="admEnrollProgFilter(this.value)" style="padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:13px;min-width:220px">
+          <select id="adm-enroll-stage" onchange="admEnrollProgFilter()" style="padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:13px">
+            <option value="">All stages</option>
+            <option value="SUBMITTED">Submitted</option>
+            <option value="VISITED_NOT_SUBMITTED">Visited / Not Submitted</option>
+            <option value="LOGGED_IN_NOT_VISITED">Logged in / Not Visited</option>
+            <option value="NEVER_LOGGED_IN">Never Logged In</option>
+          </select>
+          <button class="btn btn-secondary btn-sm" onclick="renderAdminEnrollmentProgress()">↺ Refresh</button>
+        </div>
+      </div>
+      <div style="overflow-x:auto">
+        <table class="data-table" id="adm-enroll-table">
+          <thead><tr>
+            <th>Emp ID</th><th>Name</th><th>Email</th><th>Stage</th>
+            <th>Last Login</th><th>Last Visit</th><th>Submitted</th>
+          </tr></thead>
+          <tbody>
+            ${rows.map(r => adminEnrollRow(r)).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+  window._admEnrollRows = rows;
+}
+
+function adminEnrollRow(r) {
+  const stageBadge = {
+    SUBMITTED:             '<span class="badge badge-green">Submitted</span>',
+    VISITED_NOT_SUBMITTED: '<span class="badge badge-amber">Visited</span>',
+    LOGGED_IN_NOT_VISITED: '<span class="badge badge-blue">Logged In</span>',
+    NEVER_LOGGED_IN:       '<span class="badge badge-red">Never Logged In</span>',
+  }[r.stage] || r.stage;
+  return `<tr data-stage="${r.stage}" data-search="${(r.emp_id+' '+(r.full_name||'')).toLowerCase()}">
+    <td><code>${r.emp_id}</code></td>
+    <td>${r.full_name || '—'}</td>
+    <td style="font-size:11px">${r.email_id || '—'}</td>
+    <td>${stageBadge}</td>
+    <td style="font-size:12px">${r.last_logged_in_at ? rFmtDate(r.last_logged_in_at) : '—'}</td>
+    <td style="font-size:12px">${r.visited_enrollment_page_at ? rFmtDate(r.visited_enrollment_page_at) : '—'}</td>
+    <td style="font-size:12px">${r.submitted_at ? rFmtDate(r.submitted_at) : '—'}</td>
+  </tr>`;
+}
+
+function admEnrollProgFilter(searchVal) {
+  if (searchVal !== undefined) document.getElementById('adm-enroll-search').value = searchVal;
+  const s = (document.getElementById('adm-enroll-search')?.value || '').toLowerCase();
+  const stage = document.getElementById('adm-enroll-stage')?.value || '';
+  document.querySelectorAll('#adm-enroll-table tbody tr').forEach(tr => {
+    const matchS = !s || tr.dataset.search.includes(s);
+    const matchT = !stage || tr.dataset.stage === stage;
+    tr.style.display = (matchS && matchT) ? '' : 'none';
+  });
+}
+window.renderAdminEnrollmentProgress = renderAdminEnrollmentProgress;
+window.admEnrollProgFilter = admEnrollProgFilter;
+
 async function renderAdminRenewalProgress() {
   const c = document.getElementById('content');
   c.innerHTML = `<div class="loading"><div class="spinner"></div> Loading renewal progress…</div>`;
