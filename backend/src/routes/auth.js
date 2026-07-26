@@ -17,6 +17,22 @@ const DEVICE_TRUST_DAYS = 30;
 const FN_BASE   = `${process.env.SUPABASE_URL || ''}/functions/v1`;
 const FN_SECRET = process.env.RENEWAL_FN_SECRET || '';
 
+// ── Enrollment email triggers (fire-and-forget; never block the request) ──
+function _fireFn(slug, payload) {
+  try {
+    const base = process.env.SUPABASE_URL;
+    if (!base) return;
+    fetch(`${base}/functions/v1/${slug}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY || ''}` },
+      body: JSON.stringify({ ...payload, secret: process.env.RENEWAL_FN_SECRET || '' }),
+    }).then(r => { if (!r.ok) console.warn(`[enroll-email] ${slug} HTTP`, r.status); })
+      .catch(e => console.warn(`[enroll-email] ${slug} error:`, e.message));
+  } catch (e) { console.warn(`[enroll-email] ${slug} trigger failed:`, e.message); }
+}
+const triggerEnrollmentConfirmationEmail = (enrollment_id, emp_id) => _fireFn('send-enrollment-confirmation', { enrollment_id, emp_id });
+const triggerEnrollmentCommunicationEmail = (emp_id) => _fireFn('send-enrollment-communication', { emp_id });
+
 const _otpHash   = (code) => crypto.createHmac('sha256', OTP_PEPPER).update(String(code)).digest('hex');
 const _tokenHash = (t)    => crypto.createHash('sha256').update(String(t)).digest('hex');
 const _genOtp    = ()     => String(crypto.randomInt(0, 1000000)).padStart(6, '0');
@@ -870,6 +886,9 @@ router.post('/enrollment', requireAuth, enrollmentLimiter, async (req, res) => {
         updated_at: now,
       }, { onConflict: 'emp_id' });
     } catch (e) { console.warn('[enrollment] monitor upsert failed:', e.message); }
+
+    // Confirmation email on submit (same pattern as renewal confirmation)
+    if (action === 'submit') triggerEnrollmentConfirmationEmail(enrollmentId, emp_id);
 
     send(200, {
       success: true,
