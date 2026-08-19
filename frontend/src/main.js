@@ -4399,8 +4399,7 @@ async function renderFFStatementPage() {
         </div>
       </div>
       <div style="display:flex;gap:8px;margin-top:4px;flex-wrap:wrap">
-        <button class="btn btn-secondary" onclick="saveExitData()">💾 Save Exit Data</button>
-        <button class="btn btn-primary"   onclick="generateFFStatement()">📑 Generate Statement</button>
+        <button class="btn btn-primary" id="ff-save-generate-btn" onclick="saveAndGenerateFF()">💾 Save &amp; Generate Statement</button>
       </div>
     </div>
 
@@ -4601,9 +4600,87 @@ function buildFFCalc() {
   };
 }
 
+
+// ─── Fetch the settlement row, retrying until the DB view produces a COMPLETE row ──
+// The view (vw_gmc_statement_required) recomputes through several joined views after
+// an exit is saved; reading too early yields partial values. We poll briefly and only
+// accept a row where every required financial field is present (not null/undefined).
+function _ffRowComplete(row) {
+  if (!row) return false;
+  // These must ALL be resolved by the view before a statement is valid.
+  const required = ['total_ctc_gmc','total_premium_exit_employee','emi_recovered_till_exit','gmc_opening_balance','final_ff_gmc_amount'];
+  return required.every(k => row[k] !== null && row[k] !== undefined && row[k] !== '');
+}
+
+async function _fetchCompleteStmtRow(rawId, { tries = 6, delayMs = 700 } = {}) {
+  for (let i = 0; i < tries; i++) {
+    let res;
+    try { res = await views.fetch('vw_gmc_statement_required', { emp_filter: rawId, pageSize: 200 }); }
+    catch { res = { data: [] }; }
+    const rows = res?.data || [];
+    const row  = rows.find(r => String(r.emp_id) === String(rawId)) || rows[0] || null;
+    if (_ffRowComplete(row)) return row;   // got a fully-computed row
+    await new Promise(r => setTimeout(r, delayMs));   // wait for the view to settle, retry
+  }
+  return null;   // never became complete
+}
+
+// ─── ONE BUTTON: save exit data, wait for a complete calc, then render ──────────
+async function saveAndGenerateFF() {
+  if (!ffData) { showToast('Load employee first', 'error'); return; }
+  const exitDate = document.getElementById('ff-exit-date')?.value;
+  const lwDay    = document.getElementById('ff-last-working-day')?.value;
+  const exitType = document.getElementById('ff-exit-type')?.value;
+  if (!exitDate || !lwDay || !exitType) {
+    showToast('Enter exit date, last working day and exit type first', 'error'); return;
+  }
+
+  const btn    = document.getElementById('ff-save-generate-btn');
+  const output = document.getElementById('ff-statement-output');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Saving & calculating…'; }
+  output.innerHTML = '<div class="loading"><div class="spinner"></div> Saving exit data and computing settlement…</div>';
+
+  try {
+    // 1) SAVE (upsert) the exit row — this drives the DB view + F&F trigger.
+    if (ffData.exitRec) {
+      await tables.update('employee_gmc_exit', ffData.empId,
+        { exit_date: exitDate, last_working_day: lwDay, exit_type: exitType }, 'emp_id');
+    } else {
+      await tables.insert('employee_gmc_exit',
+        { emp_id: ffData.empId, exit_date: exitDate, last_working_day: lwDay, exit_type: exitType });
+    }
+
+    // 2) POLL the view until it returns a COMPLETE row (never render partial data).
+    const completeRow = await _fetchCompleteStmtRow(ffData.empId);
+    if (!completeRow) {
+      output.innerHTML = '<div class="empty-state" style="padding:16px"><div class="icon">⚠️</div>' +
+        'Settlement is still calculating and did not complete in time. Please click <b>Save &amp; Generate</b> again in a moment — the statement will only be shown once every value is ready.</div>';
+      showToast('Calculation not complete yet — please try again', 'error');
+      return;
+    }
+
+    // 3) Refresh ffData with the complete row + latest related tables, then render.
+    ffData.stmtRow = completeRow;
+    ffData.exitRec = { emp_id: ffData.empId, exit_date: exitDate, last_working_day: lwDay, exit_type: exitType };
+    await generateFFStatement();
+    showToast('Statement generated', 'success');
+  } catch (e) {
+    console.error(e);
+    output.innerHTML = `<div class="empty-state" style="padding:16px"><div class="icon">⚠️</div>${e.message}</div>`;
+    showToast(e.message, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = '💾 Save &amp; Generate Statement'; }
+  }
+}
+
 // ─── Generate HTML Statement ──────────────────────────────────────────────────
 async function generateFFStatement() {
   if (!ffData) { showToast('Load employee first', 'error'); return; }
+  // Never render an incomplete statement (partial view result).
+  if (!_ffRowComplete(ffData.stmtRow)) {
+    showToast('Settlement values are incomplete — use Save & Generate', 'error');
+    return;
+  }
   const exitDate = document.getElementById('ff-exit-date')?.value;
   const exitType = document.getElementById('ff-exit-type')?.value;
   if (!exitDate || !exitType) { showToast('Enter exit date and type first', 'error'); return; }
@@ -5084,6 +5161,7 @@ function downloadFFPDF() {
 window.renderFFStatementPage = renderFFStatementPage;
 window.loadFFData            = loadFFData;
 window.saveExitData          = saveExitData;
+window.saveAndGenerateFF     = saveAndGenerateFF;
 window.generateFFStatement   = generateFFStatement;
 window.downloadFFPDF         = downloadFFPDF;
 
