@@ -29,6 +29,7 @@ const TABLE_ACCESS = {
   policy_premium_details:           { read: ['admin','hr'],            write: ['admin','hr'], delete: ['admin'] },
   gmc_rate_cards:                   { read: ['admin','hr','employee'], write: ['admin'],      delete: ['admin'] },
   gmc_premium_rates_26_27:          { read: ['admin','hr','employee'], write: ['admin'],      delete: ['admin'] },
+  gmc_rate_cards_26_27:             { read: ['admin','hr','employee'], write: ['admin'],      delete: ['admin'] },
   enrollment_eligible_2026_27:      { read: ['admin','hr','employee'], write: ['admin'],      delete: ['admin'] },
   enrollment_monitor_2026_27:       { read: ['admin','hr'],            write: ['admin'],      delete: ['admin'] },
   insurer_opening_balance:          { read: ['admin','hr'],            write: ['admin'],      delete: ['admin'] },

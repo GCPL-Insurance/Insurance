@@ -596,8 +596,9 @@ router.get('/enrollment-data', requireAuth, enrollmentLimiter, async (req, res) 
         .select('emp_id,emp_name,gender,date_of_birth,department,designation,date_of_joining,ctc_gmc_per_month,unit,gmc_inclusion_date,gmc_effective_date,email_id,mobile_number,is_active,status')
         .eq('emp_id', emp_id).single(),
       // 2. Rate cards for sum insured options
-      supabase.from('gmc_premium_rates_26_27')
+      supabase.from('gmc_rate_cards_26_27')
         .select('id,sum_insured,age_min,age_max,annual_premium')
+        .eq('rate_card_type', 'INSURER')
         .order('sum_insured').order('age_min'),
       // 3. Existing enrollment draft
       supabase.from('employee_gmc_enrollment')

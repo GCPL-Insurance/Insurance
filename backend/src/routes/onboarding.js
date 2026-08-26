@@ -337,10 +337,11 @@ router.get('/enrollment-data', authMiddleware, async (req, res) => {
           .from('employee_gmc_enrollment_insured')
           .select('*')
           .eq('emp_id', emp_id),
-        // 4. GMC premium rate card 26-27 (single rate card — no insurer/company split)
+        // 4. GMC rate card 26-27 — enrollment uses the INSURER card (new joinees priced at insurer rate)
         supabase
-          .from('gmc_premium_rates_26_27')
+          .from('gmc_rate_cards_26_27')
           .select('id, sum_insured, age_min, age_max, annual_premium')
+          .eq('rate_card_type', 'INSURER')
           .order('sum_insured')
           .order('age_min'),
         // 5. pre-calculated CTC GMC total from view (employees-based, most accurate)
@@ -508,10 +509,11 @@ router.post('/enrollment', authMiddleware, async (req, res) => {
         const days = Math.max(1, Math.floor((POLICY_END - new Date(doj || Date.now())) / 86400000) + 1);
 
         // Premium comes from the 26-27 rate card (age-banded, per sum insured).
-        // Single rate card — no insurer/company split, no hardcoded formula.
+        // Enrollment prices on the INSURER rate card (26-27).
         const { data: rateRows } = await supabase
-          .from('gmc_premium_rates_26_27')
+          .from('gmc_rate_cards_26_27')
           .select('sum_insured, age_min, age_max, annual_premium')
+          .eq('rate_card_type', 'INSURER')
           .eq('sum_insured', sumInsured);
 
         if (!rateRows || rateRows.length === 0) {
