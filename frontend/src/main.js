@@ -409,7 +409,26 @@ function _origInitApp() {
     document.querySelectorAll('.sidebar-item[data-employee-only]').forEach(el => el.style.display = 'none');
   }
 
-  navigate(state.role === 'employee' ? 'employee_dashboard' : 'dashboard');
+  // Eligible, not-yet-submitted employees land STRAIGHT on the enrollment page
+  // (people were logging in and skipping enrollment from the dashboard).
+  if (state.role === 'employee') { routeEmployeeLanding(); }
+  else { navigate('dashboard'); }
+}
+
+// ─── POST-LOGIN LANDING (employees) ───────────────────────────────────────────
+// If the employee is eligible for 2026-27 enrollment and hasn't submitted yet,
+// take them directly to the enrollment form so they complete step 1→4. Otherwise
+// (already submitted/approved, or not eligible), land on their dashboard.
+async function routeEmployeeLanding() {
+  try {
+    const data = await enrollment.getData();          // 403 throws if not eligible
+    const status = data?.enrollment?.enrollment_status;
+    const alreadyDone = ['SUBMITTED', 'APPROVED'].includes(status);
+    if (!alreadyDone) { navigate('gmc_enrollment_form'); return; }
+  } catch (_) {
+    // not eligible (403) or fetch failed → fall through to the dashboard
+  }
+  navigate('employee_dashboard');
 }
 
 // ─── INVITE / SET-PASSWORD FLOW ───────────────────────────────────────────────
