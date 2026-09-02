@@ -4542,92 +4542,29 @@ function _normalizeFFRow(row) {
 
 // ─── Build Calculation Object from vw_gmc_statement_required ─────────────────
 function buildFFCalc() {
-  const { emp, stmtRow, insDeps, ctcIncrs, deductions, claims, exitRec } = ffData;
-
-  // ── Exit details: form values > view values > exit record
-  const exitDate = document.getElementById('ff-exit-date')?.value
-    || stmtRow?.exit_date || exitRec?.exit_date || '';
-  const lwDay    = document.getElementById('ff-last-working-day')?.value
-    || stmtRow?.last_working_day || exitRec?.last_working_day || '';
-  const exitType = document.getElementById('ff-exit-type')?.value
-    || exitRec?.exit_type || '—';
-
-  // ── Financials — ALL from vw_gmc_statement_required ─────────────────────────
-  // total_premium_exit_employee = total annual FF premium for this employee's family
-  const totalPremiumFF    = Math.round(Number(stmtRow?.total_premium_exit_employee || 0));
-  // total_ctc_gmc = sum of monthly CTC GMC from Aug to last working day
-  const totalCtcGmc       = Math.round(Number(stmtRow?.total_ctc_gmc              || 0));
-  // emi_recovered_till_exit = total payroll deductions till exit
-  const emiRecovered      = Math.round(Number(stmtRow?.emi_recovered_till_exit    || 0));
-  // gmc_opening_balance = carry-forward balance from 2024-25
-  const openingBalance    = Math.round(Number(stmtRow?.gmc_opening_balance        || 0));
-  // final_ff_gmc_amount: POSITIVE = Payable TO employee (refund), NEGATIVE = Recoverable FROM employee
-  const finalAmount       = Math.round(Number(stmtRow?.final_ff_gmc_amount        || 0));
-  // final_wording from view's CASE statement
-  const finalWording      = stmtRow?.final_wording || (
-    finalAmount > 0 ? 'Payable to Employee' :
-    finalAmount < 0 ? 'Recoverable from Employee' : 'NIL'
-  );
-
-  // ── Latest CTC GMC per month from employee_ctc_gmc_increment ────────────────
-  let latestCtcGmc = Number(emp?.ctc_gmc_per_month || 0);
-  if (ctcIncrs.length > 0) {
-    const sorted = [...ctcIncrs].sort((a,b) =>
-      new Date(b.increment_effective_date||0) - new Date(a.increment_effective_date||0));
-    latestCtcGmc = Number(sorted[0].new_ctc_gmc_per_month || latestCtcGmc);
-  }
-  latestCtcGmc = Math.round(latestCtcGmc);
-
-  // ── Claims: "Claimed This Year" = any non-rejected, non-closed claim ─────────
-  const activeClaims    = claims.filter(c =>
-    !['Rejected','Closed','rejected','closed'].includes(String(c.claim_status||'')));
-  const claimedThisYear = activeClaims.length > 0 ? 'Yes' : 'No';
-
-  // ── Insured members — deduplicate, remove duplicate Self rows ────────────────
-  const seen = new Set();
-  const uniqueDeps = insDeps.filter(d => {
-    const key = `${(d.insured_name||'').toLowerCase().trim()}|${(d.relationship||'').toLowerCase()}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-  // Self shown from employee record; keep only non-Self dependents from table
-  const nonSelfDeps = uniqueDeps.filter(d =>
-    (d.relationship||'').toLowerCase() !== 'self');
-
-  // Sum insured from insurance_dependents or financials
-  const sumInsured = Math.round(Number(
-    uniqueDeps[0]?.sum_insured || emp?.sum_insured || 0
-  ));
-
-  // ── Payroll deduction total (cross-verify with emi_recovered_till_exit) ───────
-  const totalDeductedRaw = deductions.reduce((s,d) => s + Number(d.deducted_amount||0), 0);
-  // Prefer view's EMI recovered (authoritative), show breakdown from deductions table
-  const totalDeducted    = emiRecovered > 0 ? emiRecovered : Math.round(totalDeductedRaw);
-
+  // EVERY value comes straight from vw_gmc_ff_register (stmtRow). NO client-side
+  // calculation, NO fallback to raw tables — the register is the single source of truth.
+  const { stmtRow, exitRec } = ffData;
+  const r = stmtRow || {};
+  const exitDate = document.getElementById('ff-exit-date')?.value || r.exit_date || exitRec?.exit_date || '';
+  const lwDay    = document.getElementById('ff-last-working-day')?.value || r.last_working_day || exitRec?.last_working_day || '';
+  const exitType = document.getElementById('ff-exit-type')?.value || r.exit_type || exitRec?.exit_type || '—';
+  const num = v => Math.round(Number(v || 0));
   return {
-    empId: ffData.empId,
-    empName:     stmtRow?.emp_name     || emp?.emp_name     || ffData.empId,
-    doj:         stmtRow?.date_of_joining || emp?.date_of_joining,
-    department:  emp?.department,
-    designation: emp?.designation,
-    dob:         emp?.date_of_birth,
+    empId:       ffData.empId,
+    empName:     r.emp_name       || ffData.empId,
+    doj:         r.date_of_joining,
+    department:  r.department,
+    unit:        r.unit,
     exitDate, lwDay, exitType,
-    // Insurance
-    sumInsured, claimedThisYear,
-    totalClaims: claims.length, activeClaims: activeClaims.length,
-    // Financials (from vw_gmc_statement_required)
-    totalPremiumFF,    // Total FF Premium (annual, all family members)
-    totalCtcGmc,       // Total CTC GMC (Aug to last working day)
-    latestCtcGmc,      // CTC GMC per month (latest increment)
-    openingBalance,    // Opening balance from 24-25
-    totalDeducted,     // EMI recovered till exit (salary deductions)
-    finalAmount,       // + = Payable to employee, - = Recoverable from employee
-    finalWording,      // String from view CASE
-    // Dependents
-    nonSelfDeps, uniqueDeps,
-    // Deduction detail rows
-    deductions,
+    policyYear:  r.policy_year,
+    isClaimed:   (r.is_claimed === true || String(r.is_claimed).toLowerCase() === 'true') ? 'Yes' : 'No',
+    totalPremiumFF:  num(r.total_premium_exit_employee != null ? r.total_premium_exit_employee : r.ff_premium),
+    totalCtcGmc:     num(r.total_ctc_gmc),
+    openingBalance:  num(r.gmc_opening_balance),
+    totalDeducted:   num(r.emi_recovered_till_exit),
+    finalAmount:     num(r.final_ff_gmc_amount),
+    finalWording:    r.final_wording || 'NIL',
   };
 }
 
@@ -4775,10 +4712,7 @@ async function generateFFStatement() {
           <div class="ff-section-title">🏥 GMC Policy Summary</div>
           <div class="ff-2col" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px">
             <div>
-              <div class="ff-row">
-                <span class="ff-row-label">Sum Insured (Family Floater)</span>
-                <span class="ff-row-value">${fmtINR(c.sumInsured)}</span>
-              </div>
+
               <div class="ff-row">
                 <span class="ff-row-label">Insurance Insurer</span>
                 <span class="ff-row-value">Magma General Insurance Ltd.</span>
@@ -4789,22 +4723,15 @@ async function generateFFStatement() {
               </div>
               <div class="ff-row">
                 <span class="ff-row-label">Policy Period</span>
-                <span class="ff-row-value">24 Jul 2025 – 23 Jul 2026</span>
+                <span class="ff-row-value">${c.policyYear==='2025-26' ? '24 Jul 2025 – 23 Jul 2026' : '24 Jul 2026 – 23 Jul 2027'}</span>
               </div>
             </div>
             <div>
+
               <div class="ff-row">
-                <span class="ff-row-label">No. of Insured Members</span>
-                <span class="ff-row-value">${c.nonSelfDeps.length + 1} (Self + ${c.nonSelfDeps.length} dependents)</span>
-              </div>
-              <div class="ff-row">
-                <span class="ff-row-label">Total Claims Filed</span>
-                <span class="ff-row-value">${c.totalClaims}</span>
-              </div>
-              <div class="ff-row">
-                <span class="ff-row-label">Claimed This Year (2025–26)</span>
+                <span class="ff-row-label">Claimed This Year</span>
                 <span class="ff-row-value">
-                  <span class="badge ${c.claimedThisYear==='Yes'?'badge-amber':'badge-green'}">${c.claimedThisYear}</span>
+                  <span class="badge ${c.isClaimed==='Yes'?'badge-amber':'badge-green'}">${c.isClaimed}</span>
                 </span>
               </div>
               <div class="ff-row">
@@ -4833,11 +4760,7 @@ async function generateFFStatement() {
                   <td style="color:var(--text2);font-size:12px">Policy 24 Jul 2025 – ${policyEndLabel} · pro-rated to exit date</td>
                   <td style="text-align:right;font-weight:700">${fmtINR(c.totalPremiumFF)}</td>
                 </tr>
-                <tr style="background:#fafafa">
-                  <td>CTC GMC Per Month (Latest)</td>
-                  <td style="color:var(--text2);font-size:12px">From latest increment record</td>
-                  <td style="text-align:right;font-weight:700">${fmtINR(c.latestCtcGmc)}</td>
-                </tr>
+
                 <tr>
                   <td>Total CTC GMC Available</td>
                   <td style="color:var(--text2);font-size:12px">GMC financial year Aug–Jul · up to last working day</td>
@@ -4868,82 +4791,6 @@ async function generateFFStatement() {
             </table>
           </div>
         </div>
-
-        <!-- ── Section 3: Insured Family Members ── -->
-        <div class="ff-section">
-          <div class="ff-section-title">👨‍👩‍👧 Insured Family Members</div>
-          <div style="overflow-x:auto">
-            <table class="data-table">
-              <thead>
-                <tr>
-                  <th>#</th><th>Name</th><th>Relationship</th><th>DOB</th>
-                  <th>Sum Insured</th><th>Status</th><th>Policy Period</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td>1</td>
-                  <td><strong>${c.empName}</strong></td>
-                  <td>Self</td>
-                  <td>${fmtDate(c.dob)}</td>
-                  <td>${fmtINR(c.sumInsured)}</td>
-                  <td><span class="badge badge-green">Active</span></td>
-                  <td>24 Jul 2025 – ${policyEndLabel}</td>
-                </tr>
-                ${c.nonSelfDeps.map((d,i)=>`
-                  <tr>
-                    <td>${i+2}</td>
-                    <td>${d.insured_name||'—'}</td>
-                    <td>${d.relationship||'—'}</td>
-                    <td>${fmtDate(d.date_of_birth)}</td>
-                    <td>${fmtINR(d.sum_insured)}</td>
-                    <td><span class="badge ${d.status==='A'||d.status==='Active'?'badge-green':'badge-red'}">
-                      ${d.status==='A'||d.status==='Active'?'Active':'Inactive'}
-                    </span></td>
-                    <td>${fmtDate(d.policy_start_date)||'24 Jul 2025'} – ${policyEndLabel}</td>
-                  </tr>`).join('')}
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        <!-- ── Section 4: Payroll Deduction History ── -->
-        ${c.deductions.length > 0 ? `
-        <div class="ff-section">
-          <div class="ff-section-title">📋 Payroll Deduction History</div>
-          <div style="overflow-x:auto">
-            <table class="data-table">
-              <thead>
-                <tr><th>Payroll Month</th><th style="text-align:right">Deducted Amount</th></tr>
-              </thead>
-              <tbody>
-                ${(() => {
-                  // ✅ FIX: Group by payroll_month — prevents showing duplicate rows
-                  // when the deduction table has 2 rows for the same month (e.g. ₹3713 + ₹274)
-                  const grouped = Object.values(
-                    c.deductions.reduce((acc, d) => {
-                      const key = d.payroll_month;
-                      if (!acc[key]) acc[key] = { payroll_month: key, deducted_amount: 0, remarks: [] };
-                      acc[key].deducted_amount += Number(d.deducted_amount || 0);
-                      const r = (d.remarks || '').trim();
-                      if (r && r.toLowerCase() !== 'nil') acc[key].remarks.push(r);
-                      return acc;
-                    }, {})
-                  ).sort((a, b) => a.payroll_month.localeCompare(b.payroll_month));
-                  return grouped.map(d=>`
-                  <tr>
-                    <td>${d.payroll_month||'—'}</td>
-                    <td style="text-align:right;font-weight:600">${fmtINR(d.deducted_amount)}</td>
-                  </tr>`).join('') +
-                  `<tr style="background:#eff6ff;font-weight:800">
-                    <td>TOTAL (${grouped.length} month${grouped.length !== 1 ? 's' : ''})</td>
-                    <td style="text-align:right;color:var(--accent)">${fmtINR(grouped.reduce((s,d)=>s+d.deducted_amount,0))}</td>
-                  </tr>`;
-                })()}
-              </tbody>
-            </table>
-          </div>
-        </div>` : ''}
 
         <!-- ── Final Settlement Banner ── -->
         <div class="ff-total" style="background:${finalBadgeColor}">
@@ -5028,8 +4875,7 @@ function downloadFFPDF() {
         ['Department',       c.department||'—',      'Designation',    c.designation||'—'],
         ['Date of Joining',  fmtDate(c.doj),         'Date of Exit',   fmtDate(c.exitDate)],
         ['Last Working Day', fmtDate(c.lwDay),        'Exit Type',      c.exitType||'—'],
-        ['Sum Insured',      fmtPDF(c.sumInsured),    'Claimed This Year', c.claimedThisYear],
-        ['No. of Members',   String(c.nonSelfDeps.length+1), 'Total Claims Filed', String(c.totalClaims)],
+        ['Policy Year',      c.policyYear||'2026-27', 'Claimed This Year', c.isClaimed],
       ],
       styles:       { fontSize:9, cellPadding:2.8 },
       columnStyles: {
@@ -5050,9 +4896,6 @@ function downloadFFPDF() {
         ['Total FF Premium (All Insured Members)',
           `Policy 24 Jul 2025-${policyEndLabel}, pro-rated to exit date`,
           fmtPDF(c.totalPremiumFF)],
-        ['CTC GMC Per Month (Latest Increment)',
-          'From latest increment record',
-          fmtPDF(c.latestCtcGmc)],
         ['Total CTC GMC Available',
           'GMC FY Aug-Jul, up to last working day',
           fmtPDF(c.totalCtcGmc)],
@@ -5083,74 +4926,6 @@ function downloadFFPDF() {
       theme: 'grid',
     });
     y = doc.lastAutoTable.finalY + 8;
-
-    // ── Insured Family Members
-    if (y > 200) { doc.addPage(); y = 18; }
-    doc.setFontSize(10); doc.setFont('helvetica','bold');
-    doc.text('Insured Family Members', M, y); y += 5;
-    const membersBody = [
-      [c.empName, 'Self', fmtDate(c.dob), fmtPDF(c.sumInsured), 'Active',
-       '24 Jul 2025 - '+fmtDate(c.lwDay)],
-      ...c.nonSelfDeps.map(d=>[
-        d.insured_name||'—',
-        d.relationship||'—',
-        fmtDate(d.date_of_birth),
-        fmtPDF(d.sum_insured),
-        d.status==='A'||d.status==='Active' ? 'Active' : 'Inactive',
-        (fmtDate(d.policy_start_date)||'24 Jul 2025') + ' - ' + policyEndLabel,
-      ]),
-    ];
-    doc.autoTable({
-      startY: y, margin: { left:M, right:M },
-      head: [['Name','Relationship','DOB','Sum Insured','Status','Policy Period']],
-      body: membersBody,
-      styles:     { fontSize:8, cellPadding:2.2 },
-      headStyles: { fillColor:[29,78,216], textColor:255, fontStyle:'bold' },
-      alternateRowStyles: { fillColor:[243,246,255] },
-      theme: 'grid',
-    });
-    y = doc.lastAutoTable.finalY + 8;
-
-    // ── Payroll Deduction History
-    if (c.deductions.length > 0) {
-      if (y > 220) { doc.addPage(); y = 18; }
-      doc.setFontSize(10); doc.setFont('helvetica','bold');
-      doc.text('Payroll Deduction History', M, y); y += 5;
-      // ✅ FIX: Group by payroll_month — prevents duplicate rows in PDF
-      const dedGrouped = Object.values(
-        c.deductions.reduce((acc, d) => {
-          const key = d.payroll_month;
-          if (!acc[key]) acc[key] = { payroll_month: key, deducted_amount: 0, remarks: [] };
-          acc[key].deducted_amount += Number(d.deducted_amount || 0);
-          const r = (d.remarks || '').trim();
-          if (r && r.toLowerCase() !== 'nil') acc[key].remarks.push(r);
-          return acc;
-        }, {})
-      ).sort((a,b) => a.payroll_month.localeCompare(b.payroll_month));
-      const dedTotal = dedGrouped.reduce((s,d) => s + d.deducted_amount, 0);
-      const dedBody = dedGrouped.map(d=>[
-        d.payroll_month||'—',
-        fmtPDF(d.deducted_amount),
-      ]);
-      dedBody.push(['TOTAL ('+dedGrouped.length+' month'+(dedGrouped.length!==1?'s':'')+' )', fmtPDF(dedTotal)]);
-      doc.autoTable({
-        startY: y, margin: { left:M, right:M },
-        head: [['Payroll Month','Deducted Amount']],
-        body: dedBody,
-        styles:     { fontSize:8.5, cellPadding:2.5 },
-        headStyles: { fillColor:[29,78,216], textColor:255, fontStyle:'bold' },
-        columnStyles: { 1: { halign:'right', fontStyle:'bold' } },
-        alternateRowStyles: { fillColor:[243,246,255] },
-        didParseCell(data) {
-          if (data.row.index === dedBody.length - 1) {
-            data.cell.styles.fontStyle  = 'bold';
-            data.cell.styles.fillColor  = [220,230,255];
-          }
-        },
-        theme: 'grid',
-      });
-      y = doc.lastAutoTable.finalY + 10;
-    }
 
     // ── Final Settlement Band
     if (y > 240) { doc.addPage(); y = 18; }
