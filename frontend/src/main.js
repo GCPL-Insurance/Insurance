@@ -143,6 +143,7 @@ const VIEWS = [
   { key: 'vw_gmc_policy_constants',               label: 'GMC Policy Constants',            empFilter: false },
   { key: 'vw_gmc_settlement',                     label: 'GMC Settlement',                  empFilter: true },
   { key: 'vw_gmc_statement_required',             label: 'GMC Statement Required',          empFilter: true },
+  { key: 'vw_gmc_ff_register',                    label: 'GMC F&F Register (25-26 + 26-27)', empFilter: true },
   { key: 'vw_gpa_addition',                       label: 'GPA Addition',                    empFilter: true },
   { key: 'vw_gpa_deletion',                       label: 'GPA Deletion',                    empFilter: true },
   { key: 'vw_insurance_addition_deletion_premium',label: 'Addition/Deletion Premium',       empFilter: false },
@@ -177,6 +178,7 @@ const VIEW_META = {
   vw_gmc_policy_constants:               { filterCol: null,     icon: '📌',  category: 'Policy' },
   vw_gmc_settlement:                     { filterCol: 'emp_id', icon: '🤝',  category: 'F&F' },
   vw_gmc_statement_required:             { filterCol: 'emp_id', icon: '📝',  category: 'F&F' },
+  vw_gmc_ff_register:                    { filterCol: 'emp_id', icon: '📋',  category: 'F&F' },
   vw_gpa_addition:                       { filterCol: 'emp_id', icon: '➕',  category: 'GPA' },
   vw_gpa_deletion:                       { filterCol: 'emp_id', icon: '➖',  category: 'GPA' },
   vw_insurance_addition_deletion_premium:{ filterCol: null,     icon: '💱',  category: 'Policy' },
@@ -4445,7 +4447,7 @@ async function loadFFData() {
       claimsRes,
       exitRecRes,
     ] = await Promise.all([
-      views.fetch('vw_gmc_statement_required', { emp_filter: rawId, pageSize: 200 })
+      views.fetch('vw_gmc_ff_register', { emp_filter: rawId, pageSize: 200 })
         .catch(() => ({ data: [] })),
       views.employeeFull(rawId),
       tables.list('insurance_dependents',          { emp_filter: rawId, pageSize: 100 }),
@@ -4457,7 +4459,7 @@ async function loadFFData() {
 
     // vw_gmc_statement_required row for this employee
     const allStmt = stmtRes?.data || [];
-    const stmtRow = allStmt.find(r => String(r.emp_id) === String(rawId)) || allStmt[0] || null;
+    const stmtRow = _normalizeFFRow(allStmt.find(r => String(r.emp_id) === String(rawId)) || allStmt[0] || null);
 
     const empData = empResult?.data || {};
     const emp     = empData.employees?.[0];
@@ -4526,6 +4528,16 @@ async function saveExitData() {
     showToast('Exit data saved!', 'success');
     await loadFFData();
   } catch(e) { showToast(e.message, 'error'); }
+}
+
+// Normalize a vw_gmc_ff_register row to the fields the F&F statement code expects.
+// vw_gmc_ff_register exposes ff_premium; the statement code reads total_premium_exit_employee.
+function _normalizeFFRow(row) {
+  if (!row) return row;
+  if (row.total_premium_exit_employee == null && row.ff_premium != null) {
+    row.total_premium_exit_employee = row.ff_premium;
+  }
+  return row;
 }
 
 // ─── Build Calculation Object from vw_gmc_statement_required ─────────────────
@@ -4634,10 +4646,10 @@ function _ffRowComplete(row) {
 async function _fetchCompleteStmtRow(rawId, { tries = 6, delayMs = 700 } = {}) {
   for (let i = 0; i < tries; i++) {
     let res;
-    try { res = await views.fetch('vw_gmc_statement_required', { emp_filter: rawId, pageSize: 200 }); }
+    try { res = await views.fetch('vw_gmc_ff_register', { emp_filter: rawId, pageSize: 200 }); }
     catch { res = { data: [] }; }
     const rows = res?.data || [];
-    const row  = rows.find(r => String(r.emp_id) === String(rawId)) || rows[0] || null;
+    const row  = _normalizeFFRow(rows.find(r => String(r.emp_id) === String(rawId)) || rows[0] || null);
     if (_ffRowComplete(row)) return row;   // got a fully-computed row
     await new Promise(r => setTimeout(r, delayMs));   // wait for the view to settle, retry
   }

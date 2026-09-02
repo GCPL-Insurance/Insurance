@@ -30,6 +30,7 @@ const VIEW_META = {
   vw_gmc_policy_constants:                    { empFilter: false, minRole: 'hr' },
   vw_gmc_settlement:                          { empFilter: true,  minRole: 'hr' },
   vw_gmc_statement_required:                  { empFilter: true,  minRole: 'hr' },
+  vw_gmc_ff_register:                         { empFilter: true,  minRole: 'hr' },  // unified 25-26 + 26-27 F&F (portal source)
   vw_gpa_addition:                            { empFilter: true,  minRole: 'hr' },
   vw_gpa_deletion:                            { empFilter: true,  minRole: 'hr' },
   vw_insurance_addition_deletion_premium:     { empFilter: false, minRole: 'hr' },
