@@ -4664,6 +4664,9 @@ async function generateFFStatement() {
     const isRefund   = c.finalAmount > 0;
     const isRecovery = c.finalAmount < 0;
     const absAmount  = Math.abs(c.finalAmount);
+    // Wording decided purely by the sign of the register's final amount:
+    //   positive = Payable to Employee ; negative = Recoverable from Employee.
+    const finalLabel = isRefund ? 'Payable to Employee' : isRecovery ? 'Recoverable from Employee' : 'NIL';
     const policyEndForStatement = c.exitDate || c.lwDay || '2026-07-23';
     const policyEndLabel = fmtDate(policyEndForStatement);
     const finalBadgeColor = isRefund ? '#059669' : isRecovery ? '#dc2626' : '#64748b';
@@ -4756,8 +4759,8 @@ async function generateFFStatement() {
               </thead>
               <tbody>
                 <tr>
-                  <td>Total FF Premium (All Insured Members)</td>
-                  <td style="color:var(--text2);font-size:12px">Policy 24 Jul 2025 – ${policyEndLabel} · pro-rated to exit date</td>
+                  <td>${c.policyYear||'2026-27'} Premium</td>
+                  <td style="color:var(--text2);font-size:12px">${c.policyYear==='2025-26'?'24 Jul 2025':'24 Jul 2026'} – ${fmtDate(c.exitDate)||fmtDate(c.lwDay)||'Date of Exit'}</td>
                   <td style="text-align:right;font-weight:700">${fmtINR(c.totalPremiumFF)}</td>
                 </tr>
 
@@ -4795,7 +4798,7 @@ async function generateFFStatement() {
         <!-- ── Final Settlement Banner ── -->
         <div class="ff-total" style="background:${finalBadgeColor}">
           <div>
-            <div class="ff-total-label">${finalIcon} ${c.finalWording}</div>
+            <div class="ff-total-label">${finalIcon} ${finalLabel}</div>
             <div style="font-size:11px;opacity:.8;margin-top:5px;font-weight:400;font-family:'DM Sans',sans-serif;letter-spacing:.2px">
               ${numToWords(absAmount)}
             </div>
@@ -4845,6 +4848,7 @@ function downloadFFPDF() {
     const isRefund   = c.finalAmount > 0;
     const isRecovery = c.finalAmount < 0;
     const absAmt     = Math.abs(c.finalAmount);
+    const finalLabel = isRefund ? 'Payable to Employee' : isRecovery ? 'Recoverable from Employee' : 'NIL';
     const policyEndForStatement = c.exitDate || c.lwDay || '2026-07-23';
     const policyEndLabel = fmtDate(policyEndForStatement);
     const bandColor  = isRefund ? [6,95,70] : isRecovery ? [127,29,29] : [30,41,59];
@@ -4893,7 +4897,7 @@ function downloadFFPDF() {
       startY: y, margin: { left:M, right:M },
       head: [['Description', 'Basis / Note', 'Amount']],
       body: [
-        ['Total FF Premium (All Insured Members)',
+        [(c.policyYear||'2026-27')+' Premium (24 Jul 2026 - Date of Exit)',
           `Policy 24 Jul 2025-${policyEndLabel}, pro-rated to exit date`,
           fmtPDF(c.totalPremiumFF)],
         ['Total CTC GMC Available',
@@ -4932,7 +4936,7 @@ function downloadFFPDF() {
     doc.setFillColor(...bandColor);
     doc.rect(M, y, W-2*M, 24, 'F');
     doc.setFont('helvetica','bold'); doc.setTextColor(255,255,255); doc.setFontSize(11);
-    doc.text(c.finalWording, M+5, y+9);
+    doc.text(finalLabel, M+5, y+9);
     doc.setFontSize(15);
     doc.text(fmtPDF(absAmt), W-M-3, y+9, { align:'right' });
     doc.setFontSize(8); doc.setFont('helvetica','normal'); doc.setTextColor(210,235,210);
