@@ -4441,25 +4441,19 @@ async function loadFFData() {
     const [
       stmtRes,
       empResult,
-      insDepRes,
-      ctcIncrRes,
-      deducRes,
-      claimsRes,
       exitRecRes,
     ] = await Promise.all([
       views.fetch('vw_gmc_ff_register', { emp_filter: rawId, pageSize: 200 })
         .catch(() => ({ data: [] })),
       views.employeeFull(rawId),
-      tables.list('insurance_dependents',          { emp_filter: rawId, pageSize: 100 }),
-      tables.list('employee_ctc_gmc_increment',    { emp_filter: rawId, pageSize: 100 }),
-      tables.list('employee_gmc_actual_deduction', { emp_filter: rawId, pageSize: 100 }),
-      tables.list('employee_gmc_claims',           { emp_filter: rawId, pageSize: 100 }),
       tables.list('employee_gmc_exit',             { emp_filter: rawId, pageSize: 10  }),
     ]);
 
     // vw_gmc_statement_required row for this employee
     const allStmt = stmtRes?.data || [];
-    const stmtRow = _normalizeFFRow(allStmt.find(r => String(r.emp_id) === String(rawId)) || allStmt[0] || null);
+    // EXACT match only — never fall back to row 0 (would show a different employee).
+    const _match = allStmt.find(r => String(r.emp_id).trim() === String(rawId).trim());
+    const stmtRow = _normalizeFFRow(_match || (allStmt.length === 1 ? allStmt[0] : null));
 
     const empData = empResult?.data || {};
     const emp     = empData.employees?.[0];
@@ -4477,10 +4471,6 @@ async function loadFFData() {
       empId:      rawId,
       emp:        emp || {},
       stmtRow:    stmtRow || {},
-      insDeps:    insDepRes?.data    || [],
-      ctcIncrs:   ctcIncrRes?.data   || [],
-      deductions: deducRes?.data     || [],
-      claims:     claimsRes?.data    || [],
       exitRec,
     };
 
@@ -4559,7 +4549,7 @@ function buildFFCalc() {
     exitDate, lwDay, exitType,
     policyYear:  r.policy_year,
     isClaimed:   (r.is_claimed === true || String(r.is_claimed).toLowerCase() === 'true') ? 'Yes' : 'No',
-    totalPremiumFF:  num(r.total_premium_exit_employee != null ? r.total_premium_exit_employee : r.ff_premium),
+    totalPremiumFF:  num(r.ff_premium != null ? r.ff_premium : r.total_premium_exit_employee),
     totalCtcGmc:     num(r.total_ctc_gmc),
     openingBalance:  num(r.gmc_opening_balance),
     totalDeducted:   num(r.emi_recovered_till_exit),
@@ -4586,7 +4576,8 @@ async function _fetchCompleteStmtRow(rawId, { tries = 6, delayMs = 700 } = {}) {
     try { res = await views.fetch('vw_gmc_ff_register', { emp_filter: rawId, pageSize: 200 }); }
     catch { res = { data: [] }; }
     const rows = res?.data || [];
-    const row  = _normalizeFFRow(rows.find(r => String(r.emp_id) === String(rawId)) || rows[0] || null);
+    const _m   = rows.find(r => String(r.emp_id).trim() === String(rawId).trim());
+    const row  = _normalizeFFRow(_m || (rows.length === 1 ? rows[0] : null));
     if (_ffRowComplete(row)) return row;   // got a fully-computed row
     await new Promise(r => setTimeout(r, delayMs));   // wait for the view to settle, retry
   }
@@ -4770,7 +4761,7 @@ async function generateFFStatement() {
                   <td style="text-align:right;font-weight:700">${fmtINR(c.totalCtcGmc)}</td>
                 </tr>
                 <tr style="background:#fafafa">
-                  <td>Opening Balance (2024–25 Carry Forward)</td>
+                  <td>Opening Balance (Previous Year Carry Forward)</td>
                   <td style="color:var(--text2);font-size:12px">Previous year closing balance</td>
                   <td style="text-align:right;font-weight:700">${fmtINR(c.openingBalance)}</td>
                 </tr>
@@ -4903,7 +4894,7 @@ function downloadFFPDF() {
         ['Total CTC GMC Available',
           'GMC FY Aug-Jul, up to last working day',
           fmtPDF(c.totalCtcGmc)],
-        ['Opening Balance (2024-25 Carry Forward)',
+        ['Opening Balance (Previous Year Carry Forward)',
           'Previous year closing balance',
           fmtPDF(c.openingBalance)],
         ['Total EMI Recovered via Salary',
