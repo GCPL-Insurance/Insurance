@@ -1,3 +1,6 @@
+const BUILD_VERSION = 'FF-REGISTER-20260910-1036';
+try { console.log('[GCPL portal build]', BUILD_VERSION); } catch(e){}
+
 import * as XLSX from 'xlsx';
 import { jsPDF } from 'jspdf';
 import 'jspdf-autotable';
@@ -4484,7 +4487,7 @@ async function loadFFData() {
         · ${emp?.department||stmtRow?.department||''}
         · DOJ: ${fmtDate(stmtRow?.date_of_joining || emp?.date_of_joining)}
         ${exitDate ? `<br>🚪 Exit: <strong>${fmtDate(exitDate)}</strong>` + (exitRec?.exit_type ? ` · ${exitRec.exit_type}` : '') : '<br>⚠️ No exit date found — employee may still be active in the system'}
-        ${stmtRow ? `<br>💰 Final Amount: <strong>${fmtINR(stmtRow.final_ff_gmc_amount)}</strong> (${stmtRow.final_wording})` : ''}
+        <span class="ff-build-stamp" style="display:none">${BUILD_VERSION}</span>${stmtRow ? `<br>💰 Final Amount: <strong>${fmtINR(stmtRow.final_ff_gmc_amount)}</strong> (${stmtRow.final_wording})` : ''}
       </div>
     `;
 

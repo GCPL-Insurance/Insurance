@@ -167,6 +167,8 @@ router.get('/:viewName', async (req, res) => {
     q = q.eq('emp_id', emp_filter.trim().toUpperCase());
   }
 
+  // Deterministic ordering so paginated/duplicate rows never come back in random order.
+  q = q.order('emp_id', { ascending: true });
   q = fetchAll ? q.range(0, ALL_CAP - 1) : q.range(offset, offset + ps - 1);
 
   const { data, error, count } = await q;
