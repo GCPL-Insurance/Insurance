@@ -4568,9 +4568,11 @@ function buildFFCalc() {
 // accept a row where every required financial field is present (not null/undefined).
 function _ffRowComplete(row) {
   if (!row) return false;
-  // These must ALL be resolved by the view before a statement is valid.
-  const required = ['total_ctc_gmc','total_premium_exit_employee','emi_recovered_till_exit','gmc_opening_balance','final_ff_gmc_amount'];
-  return required.every(k => row[k] !== null && row[k] !== undefined && row[k] !== '');
+  // Strict: these register fields must ALL be present and numeric. If any is
+  // missing (e.g. PostgREST returned a stale row without ff_premium), the row is
+  // NOT usable and the statement must FAIL — never compute a substitute value.
+  const required = ['total_ctc_gmc','ff_premium','emi_recovered_till_exit','gmc_opening_balance','final_ff_gmc_amount'];
+  return required.every(k => row[k] !== null && row[k] !== undefined && row[k] !== '' && !isNaN(Number(row[k])));
 }
 
 async function _fetchCompleteStmtRow(rawId, { tries = 6, delayMs = 700 } = {}) {
@@ -4638,9 +4640,16 @@ async function saveAndGenerateFF() {
 // ─── Generate HTML Statement ──────────────────────────────────────────────────
 async function generateFFStatement() {
   if (!ffData) { showToast('Load employee first', 'error'); return; }
-  // Never render an incomplete statement (partial view result).
+  // STRICT: only render values that came from the register. If the register row is
+  // missing/incomplete, show a FAILURE — never fall back to any HTML calculation.
   if (!_ffRowComplete(ffData.stmtRow)) {
-    showToast('Settlement values are incomplete — use Save & Generate', 'error');
+    const out = document.getElementById('ff-statement-output');
+    if (out) out.innerHTML = '<div class="empty-state" style="padding:20px;border:1px solid #f0b4b4;background:#fff5f5;border-radius:10px">' +
+      '<div class="icon">⚠️</div><b>Failed to load settlement from the F&amp;F register.</b><br>' +
+      'The portal could not fetch complete values from <code>vw_gmc_ff_register</code> for this employee. ' +
+      'No statement is shown because values are never calculated in the portal. ' +
+      'Please reload and try again (if it persists, reload the API schema cache: <code>NOTIFY pgrst, \'reload schema\';</code>).</div>';
+    showToast('Failed to fetch settlement from register — not shown', 'error');
     return;
   }
   const exitDate = document.getElementById('ff-exit-date')?.value;
@@ -4777,7 +4786,7 @@ async function generateFFStatement() {
                   <td colspan="2" style="font-weight:700;font-size:13px">
                     NET POSITION<br>
                     <span style="font-size:11px;font-weight:400;color:var(--text2)">
-                      Total CTC GMC + Opening Balance + EMI Recovered − Total FF Premium
+                      Net settlement as recorded in the GMC F&amp;F register
                     </span>
                   </td>
                   <td style="text-align:right;font-weight:800;font-size:15px;color:${finalBadgeColor}">
@@ -4903,7 +4912,7 @@ function downloadFFPDF() {
         ['Total EMI Recovered via Salary',
           'Payroll deductions till exit',
           fmtPDF(c.totalDeducted)],
-        ['NET POSITION',
+        ['NET POSITION (from GMC F&F register)',
           'CTC GMC + Opening Bal + EMI Recovered - FF Premium',
           fmtPDF(c.finalAmount)],
       ],
