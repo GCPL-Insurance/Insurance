@@ -145,7 +145,6 @@ const VIEWS = [
   { key: 'vw_gmc_emi_ledger',                     label: 'GMC EMI Ledger',                  empFilter: true },
   { key: 'vw_gmc_policy_constants',               label: 'GMC Policy Constants',            empFilter: false },
   { key: 'vw_gmc_settlement',                     label: 'GMC Settlement',                  empFilter: true },
-  { key: 'vw_gmc_statement_required',             label: 'GMC Statement Required',          empFilter: true },
   { key: 'vw_gmc_ff_register',                    label: 'GMC F&F Register (25-26 + 26-27)', empFilter: true },
   { key: 'vw_gpa_addition',                       label: 'GPA Addition',                    empFilter: true },
   { key: 'vw_gpa_deletion',                       label: 'GPA Deletion',                    empFilter: true },
@@ -180,7 +179,6 @@ const VIEW_META = {
   vw_gmc_emi_ledger:                     { filterCol: 'emp_id', icon: '📒',  category: 'Finance' },
   vw_gmc_policy_constants:               { filterCol: null,     icon: '📌',  category: 'Policy' },
   vw_gmc_settlement:                     { filterCol: 'emp_id', icon: '🤝',  category: 'F&F' },
-  vw_gmc_statement_required:             { filterCol: 'emp_id', icon: '📝',  category: 'F&F' },
   vw_gmc_ff_register:                    { filterCol: 'emp_id', icon: '📋',  category: 'F&F' },
   vw_gpa_addition:                       { filterCol: 'emp_id', icon: '➕',  category: 'GPA' },
   vw_gpa_deletion:                       { filterCol: 'emp_id', icon: '➖',  category: 'GPA' },
@@ -4435,11 +4433,12 @@ async function renderFFStatementPage() {
 async function loadFFData() {
   const rawId = (document.getElementById('ff-empid')?.value||'').trim();
   if (!rawId) { showToast('Please enter an Employee ID','error'); return; }
+  ffData = null;   // reset — never carry a previous employee's data into a new load
   const infoEl = document.getElementById('ff-emp-info');
   infoEl.innerHTML = '<div class="loading" style="padding:12px 0"><div class="spinner"></div> Loading…</div>';
 
   try {
-    // PRIMARY: vw_gmc_statement_required — single source of truth for all F&F financials
+    // PRIMARY: vw_gmc_ff_register — the ONLY source of truth for all F&F financials
     // This view filters is_active=false so only exited employees appear
     const [
       stmtRes,
@@ -4452,7 +4451,7 @@ async function loadFFData() {
       tables.list('employee_gmc_exit',             { emp_filter: rawId, pageSize: 10  }),
     ]);
 
-    // vw_gmc_statement_required row for this employee
+    // vw_gmc_ff_register row for this employee
     const allStmt = stmtRes?.data || [];
     // EXACT match only — never fall back to row 0 (would show a different employee).
     const _match = allStmt.find(r => String(r.emp_id).trim() === String(rawId).trim());
@@ -4533,7 +4532,7 @@ function _normalizeFFRow(row) {
   return row;
 }
 
-// ─── Build Calculation Object from vw_gmc_statement_required ─────────────────
+// ─── Build Calculation Object from vw_gmc_ff_register ────────────────────────
 function buildFFCalc() {
   // EVERY value comes straight from vw_gmc_ff_register (stmtRow). NO client-side
   // calculation, NO fallback to raw tables — the register is the single source of truth.
@@ -4563,7 +4562,7 @@ function buildFFCalc() {
 
 
 // ─── Fetch the settlement row, retrying until the DB view produces a COMPLETE row ──
-// The view (vw_gmc_statement_required) recomputes through several joined views after
+// The register (vw_gmc_ff_register) is the single source; we poll until it returns
 // an exit is saved; reading too early yields partial values. We poll briefly and only
 // accept a row where every required financial field is present (not null/undefined).
 function _ffRowComplete(row) {

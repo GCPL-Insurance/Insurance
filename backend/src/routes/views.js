@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { pgQuery, hasDirectDb } from '../db.js';
 import { supabase } from '../index.js';
 
 const router = Router();
@@ -6,6 +7,10 @@ const router = Router();
 // ─── View access metadata ──────────────────────────────────────────────────────
 // empFilter: true = employees see only their own rows; hr/admin can emp_filter
 // minRole:   minimum role required to access this view
+// These views are read via a DIRECT Postgres connection (bypassing PostgREST's
+// schema cache) so their values always match the SQL editor. Financial views only.
+const DIRECT_SQL_VIEWS = new Set(['vw_gmc_ff_register']);
+
 const VIEW_META = {
   vw_active_employees_missing_gpa:            { empFilter: true,  minRole: 'hr' },
   vw_ctc_gmc_slab_timeline:                   { empFilter: true,  minRole: 'hr' },
@@ -29,7 +34,6 @@ const VIEW_META = {
   vw_gmc_emi_ledger:                          { empFilter: true,  minRole: 'employee' },
   vw_gmc_policy_constants:                    { empFilter: false, minRole: 'hr' },
   vw_gmc_settlement:                          { empFilter: true,  minRole: 'hr' },
-  vw_gmc_statement_required:                  { empFilter: true,  minRole: 'hr' },
   vw_gmc_ff_register:                         { empFilter: true,  minRole: 'hr' },  // unified 25-26 + 26-27 F&F (portal source)
   vw_gpa_addition:                            { empFilter: true,  minRole: 'hr' },
   vw_gpa_deletion:                            { empFilter: true,  minRole: 'hr' },
@@ -158,6 +162,25 @@ router.get('/:viewName', async (req, res) => {
   // can search across every row, not just the current page.
   const fetchAll = all === '1' || all === 'true';
   const ALL_CAP = 5000;
+
+  // ── DIRECT-SQL PATH (bypass PostgREST cache) for financial views ──────────────
+  if (DIRECT_SQL_VIEWS.has(viewName) && hasDirectDb()) {
+    try {
+      const where = [];
+      const args  = [];
+      if (role === 'employee' && meta.empFilter) { args.push(emp_id); where.push(`emp_id = $${args.length}`); }
+      else if (emp_filter && meta.empFilter)     { args.push(emp_filter.trim()); where.push(`upper(emp_id) = upper($${args.length})`); }
+      const whereSql = where.length ? ('where ' + where.join(' and ')) : '';
+      const lim = fetchAll ? ALL_CAP : ps;
+      const off = fetchAll ? 0 : offset;
+      const sql = `select * from public.${viewName} ${whereSql} order by emp_id limit ${lim} offset ${off}`;
+      const r = await pgQuery(sql, args);
+      return res.json({ data: r.rows, count: r.rowCount, source: 'direct-sql' });
+    } catch (e) {
+      console.error(`[views/${viewName}] direct-sql failed, falling back to PostgREST:`, e.message);
+      // fall through to supabase path below
+    }
+  }
 
   let q = supabase.from(viewName).select('*', { count: 'exact' });
 
