@@ -1,4 +1,4 @@
-const BUILD_VERSION = 'FF-REGISTER-20260910-1036';
+const BUILD_VERSION = 'FF-RPC-20260914-LIVE';
 try { console.log('[GCPL portal build]', BUILD_VERSION); } catch(e){}
 
 import * as XLSX from 'xlsx';
