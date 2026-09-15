@@ -4445,7 +4445,7 @@ async function loadFFData() {
       empResult,
       exitRecRes,
     ] = await Promise.all([
-      views.fetch('vw_gmc_ff_register', { emp_filter: rawId, pageSize: 200 })
+      apiFetch('/views/ff-settlement/' + encodeURIComponent(rawId))
         .catch(() => ({ data: [] })),
       views.employeeFull(rawId),
       tables.list('employee_gmc_exit',             { emp_filter: rawId, pageSize: 10  }),
@@ -4577,7 +4577,7 @@ function _ffRowComplete(row) {
 async function _fetchCompleteStmtRow(rawId, { tries = 6, delayMs = 700 } = {}) {
   for (let i = 0; i < tries; i++) {
     let res;
-    try { res = await views.fetch('vw_gmc_ff_register', { emp_filter: rawId, pageSize: 200 }); }
+    try { res = await apiFetch('/views/ff-settlement/' + encodeURIComponent(rawId)); }
     catch { res = { data: [] }; }
     const rows = res?.data || [];
     const _m   = rows.find(r => String(r.emp_id).trim() === String(rawId).trim());

@@ -140,6 +140,26 @@ router.get('/employee-full/:empId', async (req, res) => {
   res.json({ emp_id: empIdNorm, data: result, ...(Object.keys(errors).length ? { _errors: errors } : {}) });
 });
 
+// ─── GET /api/views/ff-settlement/:empId ──────────────────────────────────────
+// F&F settlement for one employee via a Postgres RPC (get_ff_settlement). The
+// function runs live in Postgres, so it is IMMUNE to PostgREST's view schema-cache
+// staleness that caused intermittent 'premium 0'. Defined BEFORE /:viewName.
+router.get('/ff-settlement/:empId', async (req, res) => {
+  const { role } = req.user;
+  if ((ROLE_RANK[role] ?? -1) < (ROLE_RANK['hr'] ?? 99)) {
+    return res.status(403).json({ error: 'Access denied. Requires hr role or higher.' });
+  }
+  const empId = (req.params.empId || '').trim();
+  if (!empId) return res.status(400).json({ error: 'empId required' });
+  try {
+    const { data, error } = await supabase.rpc('get_ff_settlement', { p_emp_id: empId });
+    if (error) return res.status(400).json({ error: error.message });
+    return res.json({ data: data || [], source: 'rpc' });
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
+  }
+});
+
 // ─── GET /api/views/:viewName ─────────────────────────────────────────────────
 // MUST be defined AFTER /employee-full/:empId to avoid shadowing
 router.get('/:viewName', async (req, res) => {
