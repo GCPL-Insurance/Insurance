@@ -78,7 +78,7 @@ router.get('/employee-full/:empId', async (req, res) => {
     { name: 'insurance_dependents',           col: 'emp_id' },
     { name: 'employee_gmc_enrollment',        col: 'emp_id' },
     { name: 'enrollment_eligible_2026_27',    col: 'emp_id' },  // enrollment eligibility whitelist (26-27)
-    { name: 'employee_gmc_enrollment_insured', col: 'emp_id' },  // ✅ ADDED: GMC enrollment insured members
+    { name: 'employee_gmc_enrollment_insured', col: 'emp_id' },  // GMC enrollment insured members
     { name: 'employee_gmc_claims',            col: 'emp_id' },
     { name: 'employee_ctc_gmc_increment',     col: 'emp_id' },
     { name: 'employee_gmc_actual_deduction',  col: 'emp_id' },
@@ -89,8 +89,8 @@ router.get('/employee-full/:empId', async (req, res) => {
     { name: 'employee_gmc_net_balance',       col: 'emp_id' },
     { name: 'employee_gmc_opening_balance',   col: 'emp_id' },
     { name: 'insurance_enrollment_manual',    col: 'emp_id' },
-    { name: 'renewal_enrollment_2026_27',     col: 'emp_id' },           // ✅ ADDED: renewal enrollment
-    { name: 'renewal_enrollment_insured_2026_27', col: 'emp_id' },       // ✅ ADDED: renewal insured members
+    { name: 'renewal_enrollment_2026_27',     col: 'emp_id' },           // renewal enrollment
+    { name: 'renewal_enrollment_insured_2026_27', col: 'emp_id' },       // renewal insured members
   ];
 
   const views = [
@@ -103,8 +103,8 @@ router.get('/employee-full/:empId', async (req, res) => {
     'vw_ff_base_employees', 'vw_ff_ctc_gmc_total', 'vw_ff_emi_recovered',
     'vw_ff_insurance_days', 'vw_gpa_addition', 'vw_gpa_deletion',
     'vw_total_premium_exit_employee', 'vw_ctc_gmc_slab_timeline',
-    'vw_employee_net_balance_2025_26',  // ✅ ADDED: consolidated 25-26 financial data
-    'vw_renewal_ctc_gmc',               // ✅ ADDED: increment-aware CTC GMC/month for display
+    'vw_employee_net_balance_2025_26',  // consolidated 25-26 financial data
+    'vw_renewal_ctc_gmc',               // increment-aware CTC GMC/month for display
   ];
 
   // Run all in parallel; isolate errors per source so one failure doesn't kill the whole response
@@ -141,16 +141,66 @@ router.get('/employee-full/:empId', async (req, res) => {
 });
 
 // ─── GET /api/views/ff-settlement/:empId ──────────────────────────────────────
-// F&F settlement for one employee via a Postgres RPC (get_ff_settlement). The
-// function runs live in Postgres, so it is IMMUNE to PostgREST's view schema-cache
-// staleness that caused intermittent 'premium 0'. Defined BEFORE /:viewName.
+// F&F settlement for one employee. Uses direct Postgres connection (if available)
+// to bypass PostgREST / RPC staleness, with safe fallbacks to RPC and direct view query.
 router.get('/ff-settlement/:empId', async (req, res) => {
   const { role } = req.user;
   if ((ROLE_RANK[role] ?? -1) < (ROLE_RANK['hr'] ?? 99)) {
     return res.status(403).json({ error: 'Access denied. Requires hr role or higher.' });
   }
+
   const empId = (req.params.empId || '').trim();
   if (!empId) return res.status(400).json({ error: 'empId required' });
+
+  // Priority 1: Direct SQL query to bypass PostgREST schema cache and RPC out-of-date functions
+  if (hasDirectDb()) {
+    try {
+      const sql = `
+        SELECT 
+          emp_id,
+          emp_name,
+          department,
+          unit,
+          date_of_joining,
+          exit_date,
+          last_working_day,
+          exit_type,
+          total_ctc_gmc,
+          ff_premium,
+          emi_recovered_till_exit,
+          gmc_opening_balance,
+          final_ff_gmc_amount,
+          "position",
+          is_claimed
+        FROM public.vw_gmc_ff_register 
+        WHERE trim(emp_id::text) = trim($1) 
+        LIMIT 1
+      `;
+      const r = await pgQuery(sql, [empId]);
+      if (r && r.rows && r.rows.length > 0) {
+        return res.json({ data: r.rows, source: 'direct-sql' });
+      }
+    } catch (e) {
+      console.error(`[ff-settlement/${empId}] direct-sql failed, trying Supabase view/rpc:`, e.message);
+    }
+  }
+
+  // Priority 2: Fallback direct view query via Supabase
+  try {
+    const { data: viewData, error: viewError } = await supabase
+      .from('vw_gmc_ff_register')
+      .select('*')
+      .eq('emp_id', empId)
+      .limit(1);
+
+    if (!viewError && viewData && viewData.length > 0) {
+      return res.json({ data: viewData, source: 'supabase-view' });
+    }
+  } catch (e) {
+    console.error(`[ff-settlement/${empId}] supabase-view query failed:`, e.message);
+  }
+
+  // Priority 3: Fallback to RPC function
   try {
     const { data, error } = await supabase.rpc('get_ff_settlement', { p_emp_id: empId });
     if (error) return res.status(400).json({ error: error.message });
@@ -161,7 +211,7 @@ router.get('/ff-settlement/:empId', async (req, res) => {
 });
 
 // ─── GET /api/views/:viewName ─────────────────────────────────────────────────
-// MUST be defined AFTER /employee-full/:empId to avoid shadowing
+// MUST be defined AFTER /employee-full/:empId and /ff-settlement/:empId to avoid shadowing
 router.get('/:viewName', async (req, res) => {
   const { viewName } = req.params;
   const { role, emp_id } = req.user;
@@ -178,7 +228,7 @@ router.get('/:viewName', async (req, res) => {
   const ps = Math.min(500, Math.max(1, parseInt(pageSize) || 100));
   const offset = pg * ps;
 
-  // ✅ SEARCH-ALL MODE: ?all=1 returns the full view (up to cap) so the frontend
+  // SEARCH-ALL MODE: ?all=1 returns the full view (up to cap) so the frontend
   // can search across every row, not just the current page.
   const fetchAll = all === '1' || all === 'true';
   const ALL_CAP = 5000;
@@ -204,7 +254,7 @@ router.get('/:viewName', async (req, res) => {
 
   // For F&F views, request EXPLICIT columns (not '*'): if a stale PostgREST worker's
   // schema cache is missing a column, this ERRORS visibly instead of silently returning
-  // a row without ff_premium (which showed as premium 0). Frontend then shows 'Failed'.
+  // a row without ff_premium (which showed as premium 0).
   const FF_COLS = 'policy_year,emp_id,emp_name,department,unit,date_of_joining,exit_date,last_working_day,exit_type,total_ctc_gmc,ff_premium,emi_recovered_till_exit,gmc_opening_balance,final_ff_gmc_amount,position,final_wording,is_claimed';
   const selectCols = DIRECT_SQL_VIEWS.has(viewName) ? FF_COLS : '*';
   let q = supabase.from(viewName).select(selectCols, { count: 'exact' });
