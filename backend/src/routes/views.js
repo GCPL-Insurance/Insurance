@@ -9,7 +9,7 @@ const router = Router();
 // minRole:   minimum role required to access this view
 // These views are read via a DIRECT Postgres connection (bypassing PostgREST's
 // schema cache) so their values always match the SQL editor. Financial views only.
-const DIRECT_SQL_VIEWS = new Set(['vw_gmc_ff_register']);
+const DIRECT_SQL_VIEWS = new Set(['vw_gmc_ff_register', 'tb_gmc_ff_register']);
 
 const VIEW_META = {
   vw_active_employees_missing_gpa:            { empFilter: true,  minRole: 'hr' },
@@ -35,6 +35,7 @@ const VIEW_META = {
   vw_gmc_policy_constants:                    { empFilter: false, minRole: 'hr' },
   vw_gmc_settlement:                          { empFilter: true,  minRole: 'hr' },
   vw_gmc_ff_register:                         { empFilter: true,  minRole: 'hr' },  // unified 25-26 + 26-27 F&F (portal source)
+  tb_gmc_ff_register:                         { empFilter: true,  minRole: 'hr' },  // materialized physical table
   vw_gpa_addition:                            { empFilter: true,  minRole: 'hr' },
   vw_gpa_deletion:                            { empFilter: true,  minRole: 'hr' },
   vw_insurance_addition_deletion_premium:     { empFilter: false, minRole: 'hr' },
@@ -52,16 +53,13 @@ const ROLE_RANK = { employee: 0, hr: 1, admin: 2 };
 // ─── GET /api/views/employee-full/:empId ─────────────────────────────────────
 // Master employee report — MUST be defined BEFORE /:viewName
 router.get('/employee-full/:empId', async (req, res) => {
-  const empId = (req.params.empId || '').trim();   // Express already URL-decodes path params
+  const empId = (req.params.empId || '').trim();
   const { role, emp_id } = req.user;
 
-  // Basic sanity only — emp_ids can be alphanumeric and contain symbols.
-  // (All queries are parameterized, so this is not an injection surface.)
   if (!empId || empId.length > 40) {
     return res.status(400).json({ error: 'Invalid empId' });
   }
 
-  // Employee can only see their own data (match the canonical id exactly — no case folding)
   if (role === 'employee' && emp_id !== empId) {
     return res.status(403).json({ error: 'Access denied' });
   }
@@ -77,8 +75,8 @@ router.get('/employee-full/:empId', async (req, res) => {
     { name: 'employee_blood_group',           col: 'emp_id' },
     { name: 'insurance_dependents',           col: 'emp_id' },
     { name: 'employee_gmc_enrollment',        col: 'emp_id' },
-    { name: 'enrollment_eligible_2026_27',    col: 'emp_id' },  // enrollment eligibility whitelist (26-27)
-    { name: 'employee_gmc_enrollment_insured', col: 'emp_id' },  // GMC enrollment insured members
+    { name: 'enrollment_eligible_2026_27',    col: 'emp_id' },
+    { name: 'employee_gmc_enrollment_insured', col: 'emp_id' },
     { name: 'employee_gmc_claims',            col: 'emp_id' },
     { name: 'employee_ctc_gmc_increment',     col: 'emp_id' },
     { name: 'employee_gmc_actual_deduction',  col: 'emp_id' },
@@ -89,8 +87,8 @@ router.get('/employee-full/:empId', async (req, res) => {
     { name: 'employee_gmc_net_balance',       col: 'emp_id' },
     { name: 'employee_gmc_opening_balance',   col: 'emp_id' },
     { name: 'insurance_enrollment_manual',    col: 'emp_id' },
-    { name: 'renewal_enrollment_2026_27',     col: 'emp_id' },           // renewal enrollment
-    { name: 'renewal_enrollment_insured_2026_27', col: 'emp_id' },       // renewal insured members
+    { name: 'renewal_enrollment_2026_27',     col: 'emp_id' },
+    { name: 'renewal_enrollment_insured_2026_27', col: 'emp_id' },
   ];
 
   const views = [
@@ -103,11 +101,10 @@ router.get('/employee-full/:empId', async (req, res) => {
     'vw_ff_base_employees', 'vw_ff_ctc_gmc_total', 'vw_ff_emi_recovered',
     'vw_ff_insurance_days', 'vw_gpa_addition', 'vw_gpa_deletion',
     'vw_total_premium_exit_employee', 'vw_ctc_gmc_slab_timeline',
-    'vw_employee_net_balance_2025_26',  // consolidated 25-26 financial data
-    'vw_renewal_ctc_gmc',               // increment-aware CTC GMC/month for display
+    'vw_employee_net_balance_2025_26',
+    'vw_renewal_ctc_gmc',
   ];
 
-  // Run all in parallel; isolate errors per source so one failure doesn't kill the whole response
   const [tableResults, viewResults] = await Promise.all([
     Promise.all(tables.map(t =>
       supabase.from(t.name).select('*').eq(t.col, empIdNorm)
@@ -132,7 +129,6 @@ router.get('/employee-full/:empId', async (req, res) => {
     if (r.error) errors[r.name] = r.error;
   });
 
-  // Log server-side if any sub-fetches failed
   if (Object.keys(errors).length > 0) {
     console.warn(`[employee-full/${empIdNorm}] partial errors:`, errors);
   }
@@ -140,10 +136,33 @@ router.get('/employee-full/:empId', async (req, res) => {
   res.json({ emp_id: empIdNorm, data: result, ...(Object.keys(errors).length ? { _errors: errors } : {}) });
 });
 
+// ─── POST /api/views/sync-ff-register ─────────────────────────────────────────
+// Triggers database function to snapshot vw_gmc_ff_register into tb_gmc_ff_register
+router.post('/sync-ff-register', async (req, res) => {
+  const { role } = req.user;
+  if ((ROLE_RANK[role] ?? -1) < (ROLE_RANK['hr'] ?? 99)) {
+    return res.status(403).json({ error: 'Access denied. Requires hr role or higher.' });
+  }
+
+  try {
+    const { data, error } = await supabase.rpc('sync_gmc_ff_register');
+    if (error) return res.status(400).json({ error: error.message });
+    return res.json({ success: true, rows_synced: data });
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
+  }
+});
+
 // ─── GET /api/views/ff-settlement/:empId ──────────────────────────────────────
-// F&F settlement for one employee. Uses direct Postgres connection (if available)
-// to bypass PostgREST / RPC staleness, with safe fallbacks to RPC and direct view query.
+// F&F settlement for one employee. Queries tb_gmc_ff_register directly to avoid
+// schema-cache and view calculation degradation.
 router.get('/ff-settlement/:empId', async (req, res) => {
+  res.set({
+    'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+    'Pragma': 'no-cache',
+    'Expires': '0'
+  });
+
   const { role } = req.user;
   if ((ROLE_RANK[role] ?? -1) < (ROLE_RANK['hr'] ?? 99)) {
     return res.status(403).json({ error: 'Access denied. Requires hr role or higher.' });
@@ -152,55 +171,47 @@ router.get('/ff-settlement/:empId', async (req, res) => {
   const empId = (req.params.empId || '').trim();
   if (!empId) return res.status(400).json({ error: 'empId required' });
 
-  // Priority 1: Direct SQL query to bypass PostgREST schema cache and RPC out-of-date functions
+  // Priority 1: Direct SQL query straight to the physical table
   if (hasDirectDb()) {
     try {
       const sql = `
         SELECT 
-          emp_id,
-          emp_name,
-          department,
-          unit,
-          date_of_joining,
-          exit_date,
-          last_working_day,
-          exit_type,
-          total_ctc_gmc,
-          ff_premium,
-          emi_recovered_till_exit,
-          gmc_opening_balance,
-          final_ff_gmc_amount,
-          "position",
-          is_claimed
-        FROM public.vw_gmc_ff_register 
-        WHERE trim(emp_id::text) = trim($1) 
+          policy_year, emp_id, emp_name, department, unit,
+          date_of_joining, exit_date, last_working_day, exit_type,
+          total_ctc_gmc, ff_premium, emi_recovered_till_exit,
+          gmc_opening_balance, final_ff_gmc_amount, "position",
+          final_wording, is_claimed
+        FROM public.tb_gmc_ff_register 
+        WHERE TRIM(emp_id::text) = TRIM($1)
+        ORDER BY policy_year DESC
         LIMIT 1
       `;
       const r = await pgQuery(sql, [empId]);
       if (r && r.rows && r.rows.length > 0) {
-        return res.json({ data: r.rows, source: 'direct-sql' });
+        return res.json({ data: r.rows, source: 'table-direct-sql' });
       }
     } catch (e) {
-      console.error(`[ff-settlement/${empId}] direct-sql failed, trying Supabase view/rpc:`, e.message);
+      console.error(`[ff-settlement/${empId}] direct-sql table read failed:`, e.message);
     }
   }
 
-  // Priority 2: Fallback direct view query via Supabase
+  // Priority 2: Supabase client direct query to the physical table
   try {
-    const { data: viewData, error: viewError } = await supabase
-      .from('vw_gmc_ff_register')
+    const { data: tblData, error: tblError } = await supabase
+      .from('tb_gmc_ff_register')
       .select('*')
       .eq('emp_id', empId)
+      .order('policy_year', { ascending: false })
       .limit(1);
 
-    if (!viewError && viewData && viewData.length > 0) {
-      return res.json({ data: viewData, source: 'supabase-view' });
+    if (!tblError && tblData && tblData.length > 0) {
+      return res.json({ data: tblData, source: 'table-supabase' });
     }
   } catch (e) {
-    console.error(`[ff-settlement/${empId}] supabase-view query failed:`, e.message);
+    console.error(`[ff-settlement/${empId}] table-supabase query failed:`, e.message);
   }
 
-  // Priority 3: Fallback to RPC function
+  // Priority 3: Fallback to the get_ff_settlement RPC function
   try {
     const { data, error } = await supabase.rpc('get_ff_settlement', { p_emp_id: empId });
     if (error) return res.status(400).json({ error: error.message });
@@ -211,8 +222,14 @@ router.get('/ff-settlement/:empId', async (req, res) => {
 });
 
 // ─── GET /api/views/:viewName ─────────────────────────────────────────────────
-// MUST be defined AFTER /employee-full/:empId and /ff-settlement/:empId to avoid shadowing
+// MUST be defined AFTER explicit subroutes to avoid path collision
 router.get('/:viewName', async (req, res) => {
+  res.set({
+    'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+    'Pragma': 'no-cache',
+    'Expires': '0'
+  });
+
   const { viewName } = req.params;
   const { role, emp_id } = req.user;
   const { emp_filter, page, pageSize, all } = req.query;
@@ -228,8 +245,6 @@ router.get('/:viewName', async (req, res) => {
   const ps = Math.min(500, Math.max(1, parseInt(pageSize) || 100));
   const offset = pg * ps;
 
-  // SEARCH-ALL MODE: ?all=1 returns the full view (up to cap) so the frontend
-  // can search across every row, not just the current page.
   const fetchAll = all === '1' || all === 'true';
   const ALL_CAP = 5000;
 
@@ -238,8 +253,13 @@ router.get('/:viewName', async (req, res) => {
     try {
       const where = [];
       const args  = [];
-      if (role === 'employee' && meta.empFilter) { args.push(emp_id); where.push(`emp_id = $${args.length}`); }
-      else if (emp_filter && meta.empFilter)     { args.push(emp_filter.trim()); where.push(`upper(emp_id) = upper($${args.length})`); }
+      if (role === 'employee' && meta.empFilter) { 
+        args.push(emp_id); 
+        where.push(`emp_id = $${args.length}`); 
+      } else if (emp_filter && meta.empFilter) { 
+        args.push(emp_filter.trim()); 
+        where.push(`upper(emp_id) = upper($${args.length})`); 
+      }
       const whereSql = where.length ? ('where ' + where.join(' and ')) : '';
       const lim = fetchAll ? ALL_CAP : ps;
       const off = fetchAll ? 0 : offset;
@@ -248,13 +268,10 @@ router.get('/:viewName', async (req, res) => {
       return res.json({ data: r.rows, count: r.rowCount, source: 'direct-sql' });
     } catch (e) {
       console.error(`[views/${viewName}] direct-sql failed, falling back to PostgREST:`, e.message);
-      // fall through to supabase path below
     }
   }
 
-  // For F&F views, request EXPLICIT columns (not '*'): if a stale PostgREST worker's
-  // schema cache is missing a column, this ERRORS visibly instead of silently returning
-  // a row without ff_premium (which showed as premium 0).
+  // Explicit column selection for F&F views to enforce correct payload structures
   const FF_COLS = 'policy_year,emp_id,emp_name,department,unit,date_of_joining,exit_date,last_working_day,exit_type,total_ctc_gmc,ff_premium,emi_recovered_till_exit,gmc_opening_balance,final_ff_gmc_amount,position,final_wording,is_claimed';
   const selectCols = DIRECT_SQL_VIEWS.has(viewName) ? FF_COLS : '*';
   let q = supabase.from(viewName).select(selectCols, { count: 'exact' });
@@ -265,7 +282,6 @@ router.get('/:viewName', async (req, res) => {
     q = q.eq('emp_id', emp_filter.trim().toUpperCase());
   }
 
-  // Deterministic ordering so paginated/duplicate rows never come back in random order.
   q = q.order('emp_id', { ascending: true });
   q = fetchAll ? q.range(0, ALL_CAP - 1) : q.range(offset, offset + ps - 1);
 
