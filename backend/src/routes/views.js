@@ -182,7 +182,12 @@ router.get('/:viewName', async (req, res) => {
     }
   }
 
-  let q = supabase.from(viewName).select('*', { count: 'exact' });
+  // For F&F views, request EXPLICIT columns (not '*'): if a stale PostgREST worker's
+  // schema cache is missing a column, this ERRORS visibly instead of silently returning
+  // a row without ff_premium (which showed as premium 0). Frontend then shows 'Failed'.
+  const FF_COLS = 'policy_year,emp_id,emp_name,department,unit,date_of_joining,exit_date,last_working_day,exit_type,total_ctc_gmc,ff_premium,emi_recovered_till_exit,gmc_opening_balance,final_ff_gmc_amount,position,final_wording,is_claimed';
+  const selectCols = DIRECT_SQL_VIEWS.has(viewName) ? FF_COLS : '*';
+  let q = supabase.from(viewName).select(selectCols, { count: 'exact' });
 
   if (role === 'employee' && meta.empFilter) {
     q = q.eq('emp_id', emp_id);
