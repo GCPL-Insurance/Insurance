@@ -4440,15 +4440,17 @@ async function loadFFData() {
   try {
     // PRIMARY: vw_gmc_ff_register — the ONLY source of truth for all F&F financials
     // This view filters is_active=false so only exited employees appear
+    // FAST: only the register (all header + financial fields) and the small exit row.
+    // The heavy employeeFull (~23 tables) was redundant — the register row already has
+    // emp_name, department, date_of_joining and the exit fields.
     const [
       stmtRes,
-      empResult,
       exitRecRes,
     ] = await Promise.all([
       views.fetch('vw_gmc_ff_register', { emp_filter: rawId, pageSize: 200 })
         .catch(() => ({ data: [] })),
-      views.employeeFull(rawId),
-      tables.list('employee_gmc_exit',             { emp_filter: rawId, pageSize: 10  }),
+      tables.list('employee_gmc_exit', { emp_filter: rawId, pageSize: 10 })
+        .catch(() => ({ data: [] })),
     ]);
 
     // vw_gmc_ff_register row for this employee
@@ -4457,16 +4459,15 @@ async function loadFFData() {
     const _match = allStmt.find(r => String(r.emp_id).trim() === String(rawId).trim());
     const stmtRow = _normalizeFFRow(_match || (allStmt.length === 1 ? allStmt[0] : null));
 
-    const empData = empResult?.data || {};
-    const emp     = empData.employees?.[0];
+    const emp = null;   // employeeFull no longer fetched; register row is the source
 
-    // Need at least employee record OR statement row
-    if (!emp && !stmtRow) {
+    // Need a register row (the F&F source). If none, the employee has no F&F.
+    if (!stmtRow) {
       infoEl.innerHTML = `<div class="empty-state" style="padding:16px"><div class="icon">🔍</div>No employee found: <b>${rawId}</b></div>`;
       return;
     }
 
-    const exitRec = exitRecRes?.data?.[0] || empData.employee_gmc_exit?.[0] || null;
+    const exitRec = exitRecRes?.data?.[0] || null;
 
     // Merge: prefer view fields, fallback to employee table
     ffData = {
