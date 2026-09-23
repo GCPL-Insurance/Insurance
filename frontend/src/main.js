@@ -4445,7 +4445,7 @@ async function loadFFData() {
       empResult,
       exitRecRes,
     ] = await Promise.all([
-      apiFetch('/views/ff-settlement/' + encodeURIComponent(rawId))
+      views.fetch('vw_gmc_ff_register', { emp_filter: rawId, pageSize: 200 })
         .catch(() => ({ data: [] })),
       views.employeeFull(rawId),
       tables.list('employee_gmc_exit',             { emp_filter: rawId, pageSize: 10  }),
@@ -4486,7 +4486,7 @@ async function loadFFData() {
         · ${emp?.department||stmtRow?.department||''}
         · DOJ: ${fmtDate(stmtRow?.date_of_joining || emp?.date_of_joining)}
         ${exitDate ? `<br>🚪 Exit: <strong>${fmtDate(exitDate)}</strong>` + (exitRec?.exit_type ? ` · ${exitRec.exit_type}` : '') : '<br>⚠️ No exit date found — employee may still be active in the system'}
-        <span class="ff-build-stamp" style="display:none">${BUILD_VERSION}</span>${stmtRow ? `<br>💰 Final Amount: <strong>${fmtINR(stmtRow.final_ff_gmc_amount)}</strong> (${stmtRow.final_wording})` : ''}
+        <span class="ff-build-stamp" style="display:none">${BUILD_VERSION}</span>${(stmtRow && stmtRow.final_ff_gmc_amount != null) ? `<br>💰 Final Amount: <strong>${fmtINR(stmtRow.final_ff_gmc_amount)}</strong>${stmtRow.final_wording ? ` (${stmtRow.final_wording})` : ''}` : ''}
       </div>
     `;
 
@@ -4577,7 +4577,7 @@ function _ffRowComplete(row) {
 async function _fetchCompleteStmtRow(rawId, { tries = 6, delayMs = 700 } = {}) {
   for (let i = 0; i < tries; i++) {
     let res;
-    try { res = await apiFetch('/views/ff-settlement/' + encodeURIComponent(rawId)); }
+    try { res = await views.fetch('vw_gmc_ff_register', { emp_filter: rawId, pageSize: 200 }); }
     catch { res = { data: [] }; }
     const rows = res?.data || [];
     const _m   = rows.find(r => String(r.emp_id).trim() === String(rawId).trim());
