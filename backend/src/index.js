@@ -39,19 +39,13 @@ try {
 }
 
 // ─── Supabase (SERVICE_ROLE — server-side only, NEVER exposed to browser) ─────
-// Custom fetch that disables HTTP keep-alive so each PostgREST request opens a FRESH
-// connection (like curl). This prevents the backend from getting pinned to a single
-// PostgREST worker whose schema cache may be stale after a view is recreated — the
-// cause of intermittent 'premium 0' where the SQL editor/curl showed correct values.
-const _freshFetch = (url, opts = {}) => fetch(url, { ...opts, keepalive: false });
-
+// Reuse HTTP keep-alive connections to Supabase (fast). The earlier 'fresh connection'
+// workaround was for a mis-diagnosed cache theory; the real F&F issue was RLS, so we
+// restore keep-alive — each request no longer pays a full TLS handshake.
 export const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY,
-  {
-    auth: { autoRefreshToken: false, persistSession: false },
-    global: { fetch: _freshFetch, headers: { Connection: 'close' } },
-  }
+  { auth: { autoRefreshToken: false, persistSession: false } }
 );
 
 const app = express();
