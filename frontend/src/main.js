@@ -4412,6 +4412,7 @@ async function renderFFStatementPage() {
           <select id="ff-exit-type">
             <option value="">— Select —</option>
             <option value="Resignation">Resignation</option>
+            <option value="Transfer">Transfer</option>
             <option value="Termination">Termination</option>
             <option value="Retirement">Retirement</option>
             <option value="Absconding">Absconding</option>
@@ -4445,9 +4446,14 @@ async function loadFFData() {
     // emp_name, department, date_of_joining and the exit fields.
     const [
       stmtRes,
+      empRes,
       exitRecRes,
     ] = await Promise.all([
       views.fetch('vw_gmc_ff_register', { emp_filter: rawId, pageSize: 200 })
+        .catch(() => ({ data: [] })),
+      // light single-row employee lookup (NOT the 23-table employeeFull) — so an
+      // employee who hasn't exited yet can still be found to ENTER their exit.
+      tables.list('employees', { emp_filter: rawId, pageSize: 1 })
         .catch(() => ({ data: [] })),
       tables.list('employee_gmc_exit', { emp_filter: rawId, pageSize: 10 })
         .catch(() => ({ data: [] })),
@@ -4459,10 +4465,11 @@ async function loadFFData() {
     const _match = allStmt.find(r => String(r.emp_id).trim() === String(rawId).trim());
     const stmtRow = _normalizeFFRow(_match || (allStmt.length === 1 ? allStmt[0] : null));
 
-    const emp = null;   // employeeFull no longer fetched; register row is the source
+    const emp = empRes?.data?.[0] || null;
 
-    // Need a register row (the F&F source). If none, the employee has no F&F.
-    if (!stmtRow) {
+    // Block ONLY if the employee genuinely doesn't exist. A not-yet-exited employee
+    // has no register row but DOES have an employees row — allow entering their exit.
+    if (!stmtRow && !emp) {
       infoEl.innerHTML = `<div class="empty-state" style="padding:16px"><div class="icon">🔍</div>No employee found: <b>${rawId}</b></div>`;
       return;
     }
@@ -4478,15 +4485,16 @@ async function loadFFData() {
     };
 
     const name = stmtRow?.emp_name || emp?.emp_name || rawId;
-    const exitDate = stmtRow?.exit_date || exitRec?.exit_date || '';
-    const lwDay    = stmtRow?.last_working_day || exitRec?.last_working_day || '';
+    const exitDate = exitRec?.exit_date || stmtRow?.exit_date || emp?.exit_date || '';
+    const lwDay    = exitRec?.last_working_day || stmtRow?.last_working_day || emp?.last_working_day || '';
+    const exitTypePrefill = exitRec?.exit_type || stmtRow?.exit_type || emp?.exit_type || '';
 
     infoEl.innerHTML = `
       <div style="background:#d1fae5;border:1px solid #a7f3d0;border-radius:10px;padding:12px 16px;font-size:13px;color:#065f46">
         ✅ <strong>${name}</strong> · <code>${rawId}</code>
         · ${emp?.department||stmtRow?.department||''}
         · DOJ: ${fmtDate(stmtRow?.date_of_joining || emp?.date_of_joining)}
-        ${exitDate ? `<br>🚪 Exit: <strong>${fmtDate(exitDate)}</strong>` + (exitRec?.exit_type ? ` · ${exitRec.exit_type}` : '') : '<br>⚠️ No exit date found — employee may still be active in the system'}
+        ${exitDate ? `<br>🚪 Exit: <strong>${fmtDate(exitDate)}</strong>` + (exitTypePrefill ? ` · ${exitTypePrefill}` : '') : '<br>ℹ️ No exit recorded yet — enter exit details below and Save.'}
         <span class="ff-build-stamp" style="display:none">${BUILD_VERSION}</span>${(stmtRow && stmtRow.final_ff_gmc_amount != null) ? `<br>💰 Final Amount: <strong>${fmtINR(stmtRow.final_ff_gmc_amount)}</strong>${stmtRow.final_wording ? ` (${stmtRow.final_wording})` : ''}` : ''}
       </div>
     `;
@@ -4495,7 +4503,7 @@ async function loadFFData() {
     exitForm.style.display = '';
     document.getElementById('ff-exit-date').value        = exitDate || '';
     document.getElementById('ff-last-working-day').value = lwDay    || '';
-    document.getElementById('ff-exit-type').value        = exitRec?.exit_type || '';
+    document.getElementById('ff-exit-type').value        = exitTypePrefill || '';
 
   } catch(e) {
     console.error(e);
