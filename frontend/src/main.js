@@ -2263,16 +2263,17 @@ function coverageDays(startDateStr) {
 function ctcGmcAvailable(ctcGmcPerMonth, unit, emp) {
   // CTC GMC available for 2026-27:
   //   one day's GMC = ctc_gmc_per_month * 12 / 365
-  //   total         = one-day value * days from Date of Joining -> 31 Jul 2027 (inclusive)
+  //   total         = one-day value * days from GMC EFFECTIVE DATE -> 31 Jul 2027 (inclusive)
+  //   (falls back to date_of_joining if gmc_effective_date is not set)
   // Same period for ALL units. Mirrors fn_recalculate_enrollment_summary in the DB.
   const perMonth = Number(ctcGmcPerMonth) || 0;
   if (perMonth <= 0) return 0;
-  const dojStr = emp?.date_of_joining;
-  if (!dojStr) return 0;
-  const doj = new Date(dojStr);
-  if (isNaN(doj.getTime())) return 0;
+  const startStr = emp?.gmc_effective_date || emp?.date_of_joining;
+  if (!startStr) return 0;
+  const start = new Date(startStr);
+  if (isNaN(start.getTime())) return 0;
   const end  = getCTCGmcEndDate(unit);        // 31 Jul 2027
-  const days = Math.floor((end - doj) / 86400000) + 1;
+  const days = Math.floor((end - start) / 86400000) + 1;
   if (days <= 0) return 0;
   return Math.round(perMonth * 12 / 365 * days);
 }
